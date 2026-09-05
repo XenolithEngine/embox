@@ -17,6 +17,10 @@
 #define AARCH64_MMU_GRANULE \
 	OPTION_MODULE_GET(embox__arch__aarch64__mmu, NUMBER, granule)
 
+/* The kernel's map lies in top-level slots no user address uses, so every
+ * address space can share the kernel's top-level entries (vmem_context.c). */
+#define MMU_SHARED_KERNEL_TOP 1
+
 /* Without extensions Aarch64 VA are 48-bit long */
 #define MMU_VADDR_WIDTH 48
 

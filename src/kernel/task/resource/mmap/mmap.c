@@ -37,6 +37,15 @@ static int mmap_inherit(struct emmap *mmap, struct emmap *p_mmap) {
 	int err;
 
 	dlist_foreach_entry(marea, &p_mmap->marea_list, mmap_link) {
+		/* XENOLITH_EL0_VMEM: a region the child already resolves through the
+		   top-level entries shared with the kernel must not enter its marea
+		   list. Mapping it would write through the shared descriptor into the
+		   kernel's own tables, and task_mmap_deinit() would later unmap it --
+		   taking the kernel's mapping with it. */
+		if (vmem_is_kernel_vaddr(marea->start)) {
+			continue;
+		}
+
 		if ((err = mmap_place(mmap, marea->start, marea->size, marea->flags))) {
 			return err;
 		}
