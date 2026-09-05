@@ -217,6 +217,145 @@ static void tcp_sock_rcv(struct tcp_sock *tcp_sk,
 			tcp_data_length(skb->h.th, skb->nh.raw) - seq_off);
 }
 
+/* Queue counters, logged on a doubling schedule so a long transfer does not
+ * drown the log and a short one still says whether the queue was used. */
+static unsigned long tcp_ooo_held = 0;
+static unsigned long tcp_ooo_released = 0;
+static unsigned long tcp_ooo_refused = 0;
+static unsigned long tcp_ooo_report = 1;
+
+static void tcp_ooo_account(void) {
+	if (tcp_ooo_held + tcp_ooo_refused < tcp_ooo_report) {
+		return;
+	}
+	tcp_ooo_report *= 2;
+	log_info("ooo queue: %lu held, %lu released, %lu refused",
+			tcp_ooo_held, tcp_ooo_released, tcp_ooo_refused);
+}
+
+void tcp_ooo_init(struct tcp_sock *tcp_sk) {
+	skb_queue_init(&tcp_sk->rcv_ooo);
+	tcp_sk->rcv_ooo_len = 0;
+}
+
+void tcp_ooo_purge(struct tcp_sock *tcp_sk) {
+	skb_queue_purge(&tcp_sk->rcv_ooo);
+	tcp_sk->rcv_ooo_len = 0;
+}
+
+/* Half a window. The queue is charged against the same budget the advertised
+ * window is computed from, so it cannot empty the skb pool. */
+static uint32_t tcp_ooo_limit(struct tcp_sock *tcp_sk) {
+	return (uint32_t)(tcp_sk->self.wind.size >> 1);
+}
+
+static void tcp_ooo_unlink(struct tcp_sock *tcp_sk, struct sk_buff *skb,
+		uint32_t data_len) {
+	list_del_init((struct list_head *)skb);
+	tcp_sk->rcv_ooo_len -= (tcp_sk->rcv_ooo_len < data_len)
+			? tcp_sk->rcv_ooo_len : data_len;
+}
+
+/**
+ * Hold a segment that is in the window but not contiguous.
+ *
+ * Returns 1 if the queue took it -- in which case the caller must NOT free
+ * the skb, and must return a code that leaves it alone (TCP_RET_SEND_ALLOC
+ * allocates a fresh reply and does exactly that).
+ */
+int tcp_ooo_queue(struct tcp_sock *tcp_sk, struct sk_buff *skb) {
+	struct sk_buff *it;
+	uint32_t seq, data_len;
+
+	assert(tcp_sk != NULL);
+	assert(skb != NULL);
+
+	data_len = (uint32_t)tcp_data_length(skb->h.th, skb->nh.raw);
+	if ((data_len == 0) || skb->h.th->fin) {
+		tcp_ooo_refused++;
+		tcp_ooo_account();
+		return 0; /* nothing to hold, or a FIN: let it be resent in order */
+	}
+
+	if (tcp_sk->rcv_ooo_len + data_len > tcp_ooo_limit(tcp_sk)) {
+		tcp_ooo_refused++;
+		tcp_ooo_account();
+		return 0; /* full: drop it, the peer still has to resend */
+	}
+
+	/* A retransmission of something already held would otherwise occupy the
+	 * queue twice over. */
+	seq = ntohl(skb->h.th->seq);
+	for (it = tcp_sk->rcv_ooo.next; !skb_queue_end(it, &tcp_sk->rcv_ooo);
+			it = skb_queue_next(it)) {
+		if (ntohl(it->h.th->seq) == seq) {
+			tcp_ooo_refused++;
+			tcp_ooo_account();
+			return 0;
+		}
+	}
+
+	skb_queue_push(&tcp_sk->rcv_ooo, skb);
+	tcp_sk->rcv_ooo_len += data_len;
+	tcp_ooo_held++;
+	tcp_ooo_account();
+
+	log_debug("ooo: held seq %u len %u, %u bytes queued", seq, data_len,
+			tcp_sk->rcv_ooo_len);
+	return 1;
+}
+
+/**
+ * Deliver everything the queue holds that has become contiguous.
+ *
+ * Sequence comparisons are signed differences, which is the only form that
+ * survives wraparound: `d` is how far rem.seq has advanced past the start of
+ * a held segment. d >= len means the whole segment is behind us and is
+ * rubbish; 0 <= d < len means it carries something new starting at d; d < 0
+ * means it is still ahead and stays.
+ */
+void tcp_ooo_drain(struct tcp_sock *tcp_sk) {
+	int progress;
+
+	assert(tcp_sk != NULL);
+
+	do {
+		struct sk_buff *skb;
+
+		progress = 0;
+		for (skb = tcp_sk->rcv_ooo.next;
+				!skb_queue_end(skb, &tcp_sk->rcv_ooo);
+				skb = skb_queue_next(skb)) {
+			uint32_t data_len = (uint32_t)tcp_data_length(skb->h.th,
+					skb->nh.raw);
+			uint32_t seq = ntohl(skb->h.th->seq);
+			int32_t d = (int32_t)(tcp_sk->rem.seq - seq);
+
+			if (d >= (int32_t)data_len) {
+				/* Entirely behind us now. */
+				tcp_ooo_unlink(tcp_sk, skb, data_len);
+				skb_free(skb);
+				progress = 1;
+				break;
+			}
+			if (d >= 0) {
+				/* Contiguous: tcp_sock_rcv trims the overlap by
+				 * rem.seq - seq itself, and the push inside it moves
+				 * the skb out of this queue. */
+				tcp_ooo_unlink(tcp_sk, skb, data_len);
+				tcp_sock_rcv(tcp_sk, skb);
+				tcp_sk->rem.seq = seq + data_len;
+				tcp_ooo_released++;
+				log_debug("ooo: released seq %u len %u, rem.seq now %u",
+						seq, data_len, tcp_sk->rem.seq);
+				progress = 1;
+				break;
+			}
+			/* Still ahead: keep it. */
+		}
+	} while (progress);
+}
+
 static void tcp_timer_update(void) {
 	bool enable_tcp_timer = false;
 	struct sock *sk;
@@ -466,7 +605,9 @@ uint16_t tcp_self_wind_value(struct tcp_sock *tcp_sk) {
 	assert(tcp_sk != NULL);
 
 	budget = tcp_sk->self.wind.size;
-	used = to_sock(tcp_sk)->rx_data_len;
+	/* Data held in the reassembly queue is as spoken for as unread data;
+	 * a window that ignored it would offer the same room twice. */
+	used = to_sock(tcp_sk)->rx_data_len + tcp_sk->rcv_ooo_len;
 	avail = used < budget ? budget - used : 0;
 	avail >>= tcp_sk->self.wind.factor;
 
@@ -602,6 +743,11 @@ void tcp_sock_release(struct tcp_sock *tcp_sk) {
         }
 		tcp_sock_unlock(tcp_sk->parent, TCP_SYNC_CONN_QUEUE);
 	}
+
+	/* Anything still held is ours to return. The children released above
+	 * are sockets from the connection queues, which never reached
+	 * ESTABLISHED and so never held anything. */
+	tcp_ooo_purge(tcp_sk);
 
 	sock_release(to_sock(tcp_sk));
 
@@ -774,6 +920,8 @@ static enum tcp_ret_code tcp_st_estabil(struct tcp_sock *tcp_sk,
 		log_debug("\t received %d", data_len);
 		tcp_sock_rcv(tcp_sk, skb);
 		tcp_sk->rem.seq += data_len;
+		/* The gap may have just closed. */
+		tcp_ooo_drain(tcp_sk);
 		if (tcph->fin) {
 			tcp_sk->rem.seq += 1;
 			tcp_sock_set_state(tcp_sk, TCP_CLOSEWAIT);
@@ -804,6 +952,8 @@ static enum tcp_ret_code tcp_st_finwait_1(struct tcp_sock *tcp_sk,
 		log_debug("\t received %d", data_len);
 		tcp_sock_rcv(tcp_sk, skb);
 		tcp_sk->rem.seq += data_len;
+		/* The gap may have just closed. */
+		tcp_ooo_drain(tcp_sk);
 		if (tcph->fin) {
 			tcp_sk->rem.seq += 1;
 			if (tcph->ack) {
@@ -846,6 +996,8 @@ static enum tcp_ret_code tcp_st_finwait_2(struct tcp_sock *tcp_sk,
 		log_debug("\t received %d\n", data_len);
 		tcp_sock_rcv(tcp_sk, skb);
 		tcp_sk->rem.seq += data_len;
+		/* The gap may have just closed. */
+		tcp_ooo_drain(tcp_sk);
 		if (tcph->fin) {
 			tcp_sk->rem.seq += 1;
 			tcp_sock_set_state(tcp_sk, TCP_TIMEWAIT);
@@ -1159,14 +1311,17 @@ static enum tcp_ret_code pre_process(struct tcp_sock *tcp_sk,
 		if (seq2rem_seq < rem_len) {
 			if (seq2rem_seq != 0) {
 				/* In window, but past a hole: something was lost.
-				 * TODO: hold this skb until the hole is filled; without
-				 * a reassembly queue it is discarded.
-				 *
 				 * Re-ACKing what we still wait for is a duplicate ACK,
 				 * so the peer can fast retransmit instead of waiting
 				 * for its timer. TCP_RET_SEND reuses this skb as the
 				 * reply, as the already-seen branch below does. */
 				tcp_set_ack_field(out_tcph, tcp_sk->rem.seq);
+				/* And hold it for when the gap closes.
+				 * TCP_RET_SEND_ALLOC builds the duplicate ACK in a
+				 * fresh skb and leaves this one to the queue. */
+				if (tcp_ooo_queue(tcp_sk, skb)) {
+					return TCP_RET_SEND_ALLOC;
+				}
 				return TCP_RET_SEND;
 			}
 		}

@@ -93,6 +93,7 @@ static int tcp_init(struct sock *sk) {
 	timerclear(&tcp_sk->rcv_time);
 	tcp_sk->dup_ack = 0;
 	tcp_sk->rexmit_mode = 0;
+	tcp_ooo_init(tcp_sk);
 
 	return 0;
 }
@@ -136,6 +137,9 @@ static void reset_unaccepted_ready(struct tcp_sock *parent){
 }
 
 static int tcp_close(struct sock *sk) {
+	/* Before any of the paths below, all of which may release the socket:
+	 * held segments belong to the pool, not to a closed connection. */
+	tcp_ooo_purge(to_tcp_sock(sk));
 	int ret;
 	struct sk_buff *skb;
 	struct tcphdr *tcph;
