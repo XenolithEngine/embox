@@ -8,7 +8,10 @@ TOOLCHAIN_TEST_OUT := $(OBJ_DIR)/toolchain_test
 all : $(TOOLCHAIN_TEST_OUT)
 
 $(TOOLCHAIN_TEST_OUT):
-ifeq ($(filter usermode%,$(ARCH)),)
+ifeq ($(COMPILER),clang)
+	@echo "Skipping toolchain_test (lld + embox-1.o aarch64 bootcode relocs)"
+	@touch $(TOOLCHAIN_TEST_OUT)
+else ifeq ($(filter usermode%,$(ARCH)),)
 	EMBOX_GCC_LINK=full $(EMBOX_GCC) $(TOOLCHAIN_TEST_SRC) -o $(TOOLCHAIN_TEST_OUT)
 else
 	@echo "Full linking mode isn't supported for usermode arch!"
