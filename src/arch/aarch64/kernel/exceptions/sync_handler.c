@@ -70,10 +70,15 @@
  *
  * Safe to call from aarch64_usermode_dead(): the frame was rewritten so this
  * runs at EL1 on the thread's own kernel stack, in thread context, where
- * log_flush() may take the filesystem's mutex. The SError and FIQ handlers
- * are a different case -- they really are exception context -- and that one
- * is still open; see docs/EMBOX-AARCH64-SMP.md, phase 8. */
+ * log_flush() may take the filesystem's mutex.
+ *
+ * The raw one below is the other half, and it is the one that may be called
+ * from anywhere: it writes the tail of the log ring to a fixed LBA through
+ * the SD controller, with no filesystem, no mutex and no sleeping. The SError
+ * and FIQ handlers call only that one. Here both are called, raw first --
+ * whichever of the two survives, the report is on the card. */
 extern void xenolith_fault_flush(void) __attribute__((weak));
+extern void xenolith_fault_flush_raw(void) __attribute__((weak));
 
 /* Xenolith: on a board with no UART the screen is the only console, and this
  * handler spins with interrupts masked -- so printk above goes to a serial
@@ -109,6 +114,9 @@ extern void fault_screen_show(const char *what, uint64_t esr, uint64_t far,
 __attribute__((weak)) void _NORETURN aarch64_usermode_dead(uint64_t reason) {
 	log_raw(LOG_EMERG, "\nEL0 exception with no usermode support (reason %#" PRIx64 ")\n",
 	    reason);
+	if (xenolith_fault_flush_raw) {
+		xenolith_fault_flush_raw();
+	}
 	if (xenolith_fault_flush) {
 		xenolith_fault_flush();
 	}
