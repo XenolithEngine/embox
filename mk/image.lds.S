@@ -53,18 +53,17 @@ SECTIONS {
 
 		ALIGNMENT();
 		_ctors_start = .;
-		KEEP(*(.init_array))
-		KEEP(*(.init_array.*))
-		KEEP(*(.ctors))
-		KEEP(*(.ctors.*))
+		/* Prioritised constructors first, in priority order; then the rest. */
+		KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*)))
+		KEEP(*(.init_array .ctors))
 		_ctors_end   = .;
 
 		ALIGNMENT();
 		_dtors_start = .;
-		KEEP(*(.fini_array))
-		KEEP(*(.fini_array.*))
-		KEEP(*(.dtors))
-		KEEP(*(.dtors.*))
+		/* Walked in reverse by cxx_invoke_destructors(): unprioritised
+		 * first here, prioritised (sorted) last. */
+		KEEP(*(.fini_array .dtors))
+		KEEP(*(SORT_BY_INIT_PRIORITY(.fini_array.*) SORT_BY_INIT_PRIORITY(.dtors.*)))
 		_dtors_end   = .;
 
 		ALIGNMENT();
