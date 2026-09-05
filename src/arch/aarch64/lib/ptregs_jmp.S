@@ -10,10 +10,14 @@
 .global ptregs_jmp
 
 ptregs_jmp:
-	add     x0, x0, #29 * 8
-	ldp	x29, x30, [x0]
-	add	sp, x29, 0
-	sub     x0, x0, #29 * 8
+	/* The link register and the stack pointer, from the slots that hold
+	 * them. This used to take the stack pointer from the saved x29, which
+	 * is the frame pointer: at -O0 that sits at the top of the caller's
+	 * frame, so SP came back above the caller's live locals and the next
+	 * interrupt wrote over them. */
+	ldr	x30, [x0, #30 * 8]
+	ldr	x1, [x0, #31 * 8]
+	mov	sp, x1
 	mov	x29, x0
 	ldp     x0, x1, [x29]
 	ldp     x2, x3, [x29, #16]!

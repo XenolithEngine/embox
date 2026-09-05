@@ -14,7 +14,10 @@
 #include <stdint.h>
 
 typedef struct pt_regs {
-	uint64_t x[31];
+	/* x[0..30] are x0..x30; x[31] is the caller's stack pointer.
+	 * The 32nd slot is not new -- vfork.S has always written it,
+	 * just past the end of a 31-element array. */
+	uint64_t x[32];
 } pt_regs_t;
 
 static inline void ptregs_retcode(struct pt_regs *ptregs, int retcode) {
