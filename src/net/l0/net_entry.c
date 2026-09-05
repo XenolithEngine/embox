@@ -25,6 +25,71 @@
 
 #define NETIF_RX_HND_PRIORITY OPTION_GET(NUMBER, hnd_priority)
 
+/* Deliberate receive loss and reordering. See board/embox-qemu/patches/
+ * netif_rx-drop-inject.py -- off unless mods.conf asks for them. */
+#define NETIF_RX_DROP_ONE_IN    OPTION_GET(NUMBER, drop_one_in)
+#define NETIF_RX_REORDER_ONE_IN OPTION_GET(NUMBER, reorder_one_in)
+#define NETIF_RX_REORDER_DELAY  OPTION_GET(NUMBER, reorder_delay)
+
+#if NETIF_RX_DROP_ONE_IN > 0
+static unsigned long netif_rx_drop_state = 2463534242ul; /* fixed seed */
+static unsigned long netif_rx_drop_count = 0;
+static unsigned long netif_rx_drop_report = 1;
+
+static int netif_rx_drop_one_in(void) {
+	unsigned long x = netif_rx_drop_state;
+
+	/* xorshift32: cheap, and the same sequence every boot, so two runs of
+	 * the same image lose the same frames and can be compared. */
+	x ^= x << 13;
+	x ^= x >> 17;
+	x ^= x << 5;
+	netif_rx_drop_state = x;
+
+	if ((x % (unsigned long)NETIF_RX_DROP_ONE_IN) != 0) {
+		return 0;
+	}
+
+	netif_rx_drop_count++;
+	if (netif_rx_drop_count >= netif_rx_drop_report) {
+		log_info("injected receive loss: %lu frames dropped (1 in %d)",
+		    netif_rx_drop_count, NETIF_RX_DROP_ONE_IN);
+		netif_rx_drop_report *= 2;
+	}
+	return 1;
+}
+#endif /* NETIF_RX_DROP_ONE_IN */
+
+#if NETIF_RX_REORDER_ONE_IN > 0
+static struct sk_buff *netif_rx_held = NULL;
+static unsigned netif_rx_held_wait = 0;
+static unsigned long netif_rx_reorder_state = 88675123ul; /* fixed seed */
+static unsigned long netif_rx_reorder_count = 0;
+static unsigned long netif_rx_reorder_report = 1;
+
+static int netif_rx_reorder_pick(void) {
+	unsigned long x = netif_rx_reorder_state;
+
+	x ^= x << 13;
+	x ^= x >> 17;
+	x ^= x << 5;
+	netif_rx_reorder_state = x;
+
+	if ((x % (unsigned long)NETIF_RX_REORDER_ONE_IN) != 0) {
+		return 0;
+	}
+
+	netif_rx_reorder_count++;
+	if (netif_rx_reorder_count >= netif_rx_reorder_report) {
+		log_info("injected reordering: %lu frames delayed by %d (1 in %d)",
+		    netif_rx_reorder_count, NETIF_RX_REORDER_DELAY,
+		    NETIF_RX_REORDER_ONE_IN);
+		netif_rx_reorder_report *= 2;
+	}
+	return 1;
+}
+#endif /* NETIF_RX_REORDER_ONE_IN */
+
 static DLIST_DEFINE(netif_rx_list);
 
 static int netif_rx_action(struct lthread *self);
@@ -58,15 +123,11 @@ static int netif_rx_action(struct lthread *self) {
 }
 
 /* we can be in irq mode */
-int netif_rx(void *data) {
+/* The normal hand-off, factored out so a held frame can take the same path
+ * when it is finally released. */
+static void netif_rx_enqueue(struct sk_buff *skb) {
+	struct net_device *dev = skb->dev;
 	ipl_t ipl;
-	struct sk_buff *skb = data;
-	struct net_device *dev;
-
-	assert(skb != NULL);
-	assert(skb->dev != NULL);
-
-	dev = skb->dev;
 
 	ipl = ipl_save();
 	{
@@ -79,8 +140,48 @@ int netif_rx(void *data) {
 		lthread_launch(&netif_rx_irq_handler);
 	}
 	ipl_restore(ipl);
+}
+
+int netif_rx(void *data) {
+	struct sk_buff *skb = data;
+	struct net_device *dev;
+
+	assert(skb != NULL);
+	assert(skb->dev != NULL);
+
+	dev = skb->dev;
+	(void)dev;
+
+#if NETIF_RX_DROP_ONE_IN > 0
+	if (netif_rx_drop_one_in()) {
+		skb_free(skb);
+		return NET_RX_DROP;
+	}
+#endif
+
+#if NETIF_RX_REORDER_ONE_IN > 0
+	if ((netif_rx_held == NULL) && netif_rx_reorder_pick()) {
+		/* Step aside and let the next few frames past. */
+		netif_rx_held = skb;
+		netif_rx_held_wait = NETIF_RX_REORDER_DELAY;
+		return NET_RX_SUCCESS;
+	}
+
+	netif_rx_enqueue(skb);
+
+	if ((netif_rx_held != NULL) && (--netif_rx_held_wait == 0)) {
+		struct sk_buff *release = netif_rx_held;
+
+		netif_rx_held = NULL;
+		netif_rx_enqueue(release);
+	}
 
 	return NET_RX_SUCCESS;
+#else
+	netif_rx_enqueue(skb);
+
+	return NET_RX_SUCCESS;
+#endif
 }
 
 static DLIST_DEFINE(netif_tx_list);
