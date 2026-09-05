@@ -334,7 +334,8 @@ static int e1000_open(struct net_device *dev) {
 	}
 #endif
 	mdelay(MDELAY);
-	REG32_ORIN(e1000_reg(dev, E1000_REG_RCTL),  E1000_REG_RCTL_MPE);
+	REG32_ORIN(e1000_reg(dev, E1000_REG_RCTL),
+	    E1000_REG_RCTL_MPE | E1000_REG_RCTL_BAM);
 
 	for (int i = 0; i < E1000_RXDESC_NR; i ++) {
 	        struct sk_buff *skb = nic_priv->rx_skbs[i];
@@ -385,7 +386,8 @@ static int set_mac_address(struct net_device *dev, const void *addr) {
 	REG32_STORE(e1000_reg(dev, E1000_REG_RAH), *(uint16_t *) (addr + 4));
 
 	REG32_ORIN(e1000_reg(dev, E1000_REG_RAH), E1000_REG_RAH_AV);
-	REG32_ORIN(e1000_reg(dev, E1000_REG_RCTL),  E1000_REG_RCTL_MPE);
+	REG32_ORIN(e1000_reg(dev, E1000_REG_RCTL),
+	    E1000_REG_RCTL_MPE | E1000_REG_RCTL_BAM);
 
 	memcpy(dev->dev_addr, addr, ETH_ALEN);
 
