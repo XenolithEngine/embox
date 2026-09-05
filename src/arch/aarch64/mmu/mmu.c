@@ -78,6 +78,12 @@ static int mmu_init(void) {
 	/* TTBR0_EL1.ASID defines the ASID */
 	tcr &= ~TCR_EL1_A1;
 
+	/* XENOLITH_EL0_MMU: the kernel is identity-mapped in the low half, so
+	   everything -- kernel and user alike -- is translated through TTBR0.
+	   Nothing generates a high-half address; disable the TTBR1 walk so a
+	   stray one faults instead of walking a stale root. */
+	tcr |= TCR_EL1_EPD1;
+
 	/* Table walks are cacheable and Inner Shareable, matching the
 	 * attributes the page tables themselves are mapped with */
 	if (WALK_CACHEABLE) {
@@ -97,6 +103,15 @@ static int mmu_init(void) {
 	mair = FIELD_SET(mair, MAIR_ELn_ATTR0, MAIR_ELn_ATTRn_DEVICE_nGnRnE);
 	mair = FIELD_SET(mair, MAIR_ELn_ATTR1, MAIR_ELn_ATTRn_NORMAL);
 	ARCH_REG_STORE(MAIR_EL1, mair);
+
+	/* XENOLITH_EL0_MMU: the reset handler wrote SCTLR_EL1 = 0, which clears
+	   every RES1 bit -- SPAN among them. On a core with ARMv8.1-PAN that means
+	   PSTATE.PAN = 1 on each exception entry to EL1, and the kernel loses
+	   access to every page carrying AP[1] (the user pages this MMU now emits):
+	   copy_to_user would take a permission fault. Writing the RES1 set keeps
+	   the ARMv8.0 behaviour on every core. A53/A72 have no PAN, so this is a
+	   no-op on the boards in tree and correct on their successors. */
+	ARCH_REG_ORIN(SCTLR_EL1, SCTLR_EL1_RES1);
 
 	return 0;
 }
@@ -155,11 +170,21 @@ mmu_ctx_t mmu_create_context(uintptr_t *pgd) {
 }
 
 void mmu_set_context(mmu_ctx_t ctx) {
-	/* Set base address of translation table 0 */
-	ARCH_REG_STORE(TTBR0_EL1, ctx);
+	/* XENOLITH_EL0_MMU: TTBR0 alone. The kernel lives in the low half of the
+	   same table, so a task root always carries the kernel's top-level entries
+	   (vmem_clone_kernel_tables) and the instruction after this switch is
+	   still mapped. TTBR1 is left as mmu_init() found it -- EPD1 is set, so it
+	   is never walked.
 
-	/* Set base address of translation table 1 */
-	ARCH_REG_STORE(TTBR1_EL1, ctx);
+	   ASID stays 0 for every context, so the TLB cannot tell two address
+	   spaces apart: the whole thing has to go on each switch. That is the
+	   price of ASID=0 and the reason real ASIDs are worth doing later. */
+	ARCH_REG_STORE(TTBR0_EL1, ctx);
+	isb();
+
+	ARCH_REG_STORE(TLBI_VMALLE1, 0);
+	dsb(sy);
+	isb();
 }
 
 uintptr_t *mmu_get_root(mmu_ctx_t ctx) {
@@ -224,11 +249,16 @@ uintptr_t mmu_pte_pack(uintptr_t addr, int prot) {
 
 	pte = addr | MMU_DESC_VD | MMU_DESC_TP | MMU_DESC_AF;
 
-	if (prot & PROT_WRITE) {
-		pte = FIELD_SET(pte, MMU_DESC_AP, MMU_DESC_AP_RW1);
+	/* XENOLITH_EL0_MMU: AP[1] is what makes a page reachable from EL0.
+	   VMEM_PAGE_USERMODE in prot selects the AP*0 pair; without it the page
+	   stays EL1-only, which is what every kernel mapping wants. */
+	if (prot & VMEM_PAGE_USERMODE) {
+		pte = FIELD_SET(pte, MMU_DESC_AP,
+		    (prot & PROT_WRITE) ? MMU_DESC_AP_RW0 : MMU_DESC_AP_RO0);
 	}
 	else {
-		pte = FIELD_SET(pte, MMU_DESC_AP, MMU_DESC_AP_RO1);
+		pte = FIELD_SET(pte, MMU_DESC_AP,
+		    (prot & PROT_WRITE) ? MMU_DESC_AP_RW1 : MMU_DESC_AP_RO1);
 	}
 
 	if (!(prot & PROT_READ)) {
@@ -246,8 +276,21 @@ uintptr_t mmu_pte_pack(uintptr_t addr, int prot) {
 		pte = FIELD_SET(pte, MMU_DESC_SH, MMU_DESC_SH_IS);
 	}
 
-	if (!(prot & PROT_EXEC)) {
+	/* XENOLITH_EL0_MMU: PXN governs execution at EL1, UXN at EL0. A user page
+	   is never executed by the kernel and a kernel page is never executed by
+	   the application, so the bit for the other level is set unconditionally;
+	   PROT_EXEC only decides the bit for the level that owns the page. */
+	if (prot & VMEM_PAGE_USERMODE) {
 		pte |= MMU_DESC_PXN;
+		if (!(prot & PROT_EXEC)) {
+			pte |= MMU_DESC_UXN;
+		}
+	}
+	else {
+		pte |= MMU_DESC_UXN;
+		if (!(prot & PROT_EXEC)) {
+			pte |= MMU_DESC_PXN;
+		}
 	}
 
 	return pte;
@@ -291,10 +334,8 @@ uintptr_t mmu_pte_unpack(uintptr_t pte, int *flags) {
 
 	*flags = 0;
 
-	if (!(pte & MMU_DESC_PXN)) {
-		*flags |= PROT_EXEC;
-	}
-
+	/* XENOLITH_EL0_MMU: AP first -- whether the page is a user page decides
+	   which execute-never bit describes it. */
 	tmp = FIELD_GET(pte, MMU_DESC_AP);
 	switch (tmp) {
 	case MMU_DESC_AP_RW1:
@@ -303,8 +344,25 @@ uintptr_t mmu_pte_unpack(uintptr_t pte, int *flags) {
 	case MMU_DESC_AP_RO1:
 		*flags |= PROT_READ;
 		break;
+	case MMU_DESC_AP_RW0:
+		*flags |= PROT_READ | PROT_WRITE | VMEM_PAGE_USERMODE;
+		break;
+	case MMU_DESC_AP_RO0:
+		*flags |= PROT_READ | VMEM_PAGE_USERMODE;
+		break;
 	default:
 		log_error("Corrupted PTE access properties");
+	}
+
+	if (*flags & VMEM_PAGE_USERMODE) {
+		if (!(pte & MMU_DESC_UXN)) {
+			*flags |= PROT_EXEC;
+		}
+	}
+	else {
+		if (!(pte & MMU_DESC_PXN)) {
+			*flags |= PROT_EXEC;
+		}
 	}
 
 	tmp = FIELD_GET(pte, MMU_DESC_ATTRINDX);
