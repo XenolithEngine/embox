@@ -1161,12 +1161,30 @@ static enum tcp_ret_code pre_process(struct tcp_sock *tcp_sk,
 		rem_len = tcp_sk->self.wind.size;
 		if (seq2rem_seq < rem_len) {
 			if (seq2rem_seq != 0) {
-				/* TODO There is correct packet (with
-				 * correct sequence number), but some packages
-				 * was lost. We should save this skb, and wait
-				 * previous packages.
-				 */
-				return TCP_RET_DROP;
+				/* In window, but past a hole: something was lost.
+				 *
+				 * TODO still: hold this skb and wait for what is
+				 * missing. Embox has no reassembly queue, so the
+				 * segment is discarded and will have to be sent
+				 * again.
+				 *
+				 * What is NOT missing any more is the answer. This
+				 * used to return TCP_RET_DROP -- discard, and say
+				 * nothing at all -- so the peer learned of the loss
+				 * only when its retransmission timer expired, and
+				 * that timer doubles. Measured on a Pi 4: minutes of
+				 * silence after a handful of drops.
+				 *
+				 * Repeating the ACK for what we are still waiting
+				 * for is a duplicate ACK, so the peer can fast
+				 * retransmit -- one round trip instead of one
+				 * timeout. Embox's own sender already does this
+				 * (dup_ack / rexmit_mode); only the receiver never
+				 * produced the signal. TCP_RET_SEND reuses this skb
+				 * as the reply, the same way the already-seen branch
+				 * below does. */
+				tcp_set_ack_field(out_tcph, tcp_sk->rem.seq);
+				return TCP_RET_SEND;
 			}
 		}
 		else if ((seq_last2rem_seq != 0)
