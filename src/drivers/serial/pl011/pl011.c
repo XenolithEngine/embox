@@ -107,7 +107,17 @@ static int pl011_setup(struct uart *dev, const struct uart_params *params) {
 	return 0;
 }
 
+/* Xenolith: keep a copy of everything this board prints. Both the kernel's
+ * diag console and the tty an application writes to end up here, so this is
+ * the only capture point that sees both. Weak: no sink, no call.
+ * See board/embox-rpi4/drivers/logsink and the patch that put this here. */
+extern void logsink_tap(char ch) __attribute__((weak));
+
 static int pl011_putc(struct uart *dev, int ch) {
+	if (logsink_tap) {
+		logsink_tap((char)ch);
+	}
+
 	while (REG32_LOAD(UART_FR(dev->base_addr)) & FR_TXFF)
 		;
 
