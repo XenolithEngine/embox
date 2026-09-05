@@ -7,6 +7,19 @@ abstract module entry_api {
 module net_entry extends entry_api {
 	option number hnd_priority = 200
 
+	/* Deliberate receive loss for testing: 0 = off, N = drop one frame in
+	 * N. See board/embox-qemu/patches/netif_rx-drop-inject.py.
+	 *
+	 * log_level comes with it: this module had none, and its only other
+	 * message is a log_debug, so turning INFO on costs nothing -- while an
+	 * injector that discards frames silently and never says how many is a
+	 * trap rather than an instrument. */
+	option number drop_one_in = 0
+	/* Hold one frame in N and deliver it reorder_delay frames later. */
+	option number reorder_one_in = 0
+	option number reorder_delay = 4
+	option string log_level = "LOG_INFO"
+
 	source "net_entry.c"
 
 	depends net_rx
