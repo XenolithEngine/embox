@@ -114,7 +114,7 @@ int send_rst_from_socket(struct tcp_sock *tcp_sk){
     dst_port = sock_inet_get_dst_port(to_sock(tcp_sk));
     src_port = sock_inet_get_src_port(to_sock(tcp_sk));
     tcp_build(tcph, dst_port, src_port, TCP_MIN_HEADER_SIZE,
-            tcp_sk->self.wind.value);
+            tcp_self_wind_emit(tcp_sk));
     tcph->rst = 1;
     tcp_sk->rem.seq++;
     tcp_set_ack_field(tcph, tcp_sk->rem.seq);
@@ -186,7 +186,7 @@ static int tcp_close(struct sock *sk) {
 			dst_port = sock_inet_get_dst_port(to_sock(tcp_sk));
 			src_port = sock_inet_get_src_port(to_sock(tcp_sk));
 			tcp_build(tcph, dst_port, src_port, TCP_MIN_HEADER_SIZE,
-					tcp_sk->self.wind.value);
+					tcp_self_wind_emit(tcp_sk));
 			tcph->fin = 1;
 			tcp_set_ack_field(tcph, tcp_sk->rem.seq);
 			send_seq_from_sock(tcp_sk, skb);
@@ -249,7 +249,7 @@ static int tcp_connect(struct sock *sk,
 			src_port = sock_inet_get_src_port(to_sock(tcp_sk));
 			tcp_build(tcph, dst_port, src_port,
 					TCP_MIN_HEADER_SIZE + sizeof(magic_opts),
-					tcp_sk->self.wind.value);
+					tcp_self_wind_emit(tcp_sk));
 			tcph->syn = 1;
 			memcpy(&tcph->options, &magic_opts[0], sizeof magic_opts);
 			send_seq_from_sock(tcp_sk, skb);
@@ -492,7 +492,7 @@ static int tcp_write(struct tcp_sock *tcp_sk, struct msghdr * msg) {
 			dst_port = sock_inet_get_dst_port(to_sock(tcp_sk));
 			src_port = sock_inet_get_src_port(to_sock(tcp_sk));
 			tcp_build(skb->h.th, dst_port, src_port, TCP_MIN_HEADER_SIZE,
-					tcp_sk->self.wind.value);
+					tcp_self_wind_emit(tcp_sk));
 		}
 
 		cp_len = min(iov_len, skb_len);
@@ -628,8 +628,25 @@ static int tcp_recvmsg(struct sock *sk, struct msghdr *msg,
 		/* fallthrough */
 	case TCP_ESTABIL:
 	case TCP_FINWAIT_1:
-	case TCP_FINWAIT_2:
-		return sock_stream_recvmsg(to_sock(tcp_sk), msg, flags);
+	case TCP_FINWAIT_2: {
+		/* Tell the peer when the queue drains, or a sender stopped at a zero
+		 * window waits for its persist probe. The comparison is against the
+		 * last advertised window, not this call's starting point: one read
+		 * is often too small to cross the threshold on its own. */
+		int ret = sock_stream_recvmsg(to_sock(tcp_sk), msg, flags);
+		uint16_t sent = tcp_sk->self.wind.value;
+		uint16_t live = tcp_self_wind_value(tcp_sk);
+		uint16_t full = (uint16_t)(tcp_sk->self.wind.size
+				>> tcp_sk->self.wind.factor);
+
+		/* A quarter of the buffer, the usual silly-window rule: often
+		 * enough that the sender is never idle, rare enough that reading a
+		 * byte does not put an ACK on the wire. */
+		if ((ret >= 0) && (live > sent) && ((live - sent) >= (full >> 2))) {
+			tcp_send_wind_update(tcp_sk);
+		}
+		return ret;
+	}
 	case TCP_CLOSING:
 	case TCP_LASTACK:
 	case TCP_TIMEWAIT:
