@@ -11,8 +11,9 @@
 
 #include <hal/reg.h>
 
-#include "exception.h"
+#include <hal/fault_log.h>
 
+#include "exception.h"
 
 void _NORETURN aarch64_serror_handler(struct excpt_context *ctx) {
 	uint32_t esr = ARCH_REG_LOAD(ESR_EL1);
@@ -38,5 +39,9 @@ void _NORETURN aarch64_serror_handler(struct excpt_context *ctx) {
 	    (uint64_t)ARCH_REG_LOAD(FAR_EL1));
 
 	aarch64_print_excpt_context(ctx);
+	if (fault_log_flush) {
+		fault_log_flush();
+	}
+
 	while (1) {};
 }

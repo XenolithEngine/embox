@@ -54,6 +54,8 @@
 #include <util/field.h>
 #include <util/log.h>
 
+#include <hal/fault_log.h>
+
 #include "exception.h"
 
 /* Xenolith: on a board with no UART the screen is the only console, and this
@@ -90,6 +92,17 @@ extern void fault_screen_show(const char *what, uint64_t esr, uint64_t far,
 __attribute__((weak)) void _NORETURN aarch64_usermode_dead(uint64_t reason) {
 	log_raw(LOG_EMERG, "\nEL0 exception with no usermode support (reason %#" PRIx64 ")\n",
 	    reason);
+	/* Thread context: the frame was rewritten so this runs at EL1 on the
+	 * thread's own kernel stack, where the filesystem may be used. The flush
+	 * that needs no lock goes first, so a report survives even if the other
+	 * one cannot finish. */
+	if (fault_log_flush) {
+		fault_log_flush();
+	}
+	if (fault_log_flush_thread) {
+		fault_log_flush_thread();
+	}
+
 	while (1) {};
 }
 

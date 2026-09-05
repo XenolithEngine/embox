@@ -8,10 +8,16 @@
 
 #include <util/log.h>
 
+#include <hal/fault_log.h>
+
 #include "exception.h"
 
 void _NORETURN aarch64_fiq_handler(struct excpt_context *ctx) {
 	log_raw(LOG_EMERG, "\nUnexpected fiq interrupt!\n");
 	aarch64_print_excpt_context(ctx);
+	if (fault_log_flush) {
+		fault_log_flush();
+	}
+
 	while (1) {};
 }
