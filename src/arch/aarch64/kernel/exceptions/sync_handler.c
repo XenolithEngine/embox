@@ -58,7 +58,21 @@
 
 /* Xenolith: write this report to the SD card before the machine stops, so a
  * board with no serial adapter still gets its post-mortem. See
- * board/embox-rpi4/patches/aarch64-fault-flush.py. Weak: no log, no call. */
+ * board/embox-rpi4/patches/aarch64-fault-flush.py. Weak: no log, no call.
+ *
+ * The declaration and the call below are in the overlay, not only in that
+ * patch, and that is the whole point: the patch inserts them into whatever
+ * sync_handler.c it finds, and then this file is copied over the top and the
+ * insertion goes with it -- silently, since a file that is replaced does not
+ * complain. The most common fault on the board is the synchronous one, and it
+ * was the one losing its post-mortem. Anything the patch adds here has to be
+ * here as well.
+ *
+ * Safe to call from aarch64_usermode_dead(): the frame was rewritten so this
+ * runs at EL1 on the thread's own kernel stack, in thread context, where
+ * log_flush() may take the filesystem's mutex. The SError and FIQ handlers
+ * are a different case -- they really are exception context -- and that one
+ * is still open; see docs/EMBOX-AARCH64-SMP.md, phase 8. */
 extern void xenolith_fault_flush(void) __attribute__((weak));
 
 /* Xenolith: on a board with no UART the screen is the only console, and this
