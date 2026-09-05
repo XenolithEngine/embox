@@ -103,6 +103,9 @@ SECTIONS {
 		*(.sbss)
 		*(.sbss.*)
 		*(.bss.[a-zA-Z0-9_-]*) /* this hell is to exclude '.bss..reserve'. */
+		/* clang's .bss..L_MergedGlobals, which the pattern above excludes too;
+		 * '.L' is the local-label prefix, so only compiler sections match. */
+		*(.bss..L*)
 		/* *(.tbss) */
 		/* *(.tbss.*) */
 
