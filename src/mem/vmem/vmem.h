@@ -35,6 +35,15 @@ extern int vmem_create_context(mmu_ctx_t *ctx);
 extern mmu_ctx_t vmem_current_context(void);
 extern void vmem_free_context(mmu_ctx_t ctx);
 
+/* XENOLITH_EL0_VMEM: copy the kernel's top-level entries into ctx. Called for
+   every context but the kernel's own; safe to call twice. */
+extern void vmem_clone_kernel_tables(mmu_ctx_t ctx);
+
+/* XENOLITH_EL0_VMEM: true when virt_addr falls in a top-level slot that every
+   address space shares with the kernel. Top-level lookup only -- no walk, so
+   it is safe on an address that is not mapped. */
+extern int vmem_is_kernel_vaddr(mmu_vaddr_t virt_addr);
+
 extern mmu_paddr_t vmem_translate(mmu_ctx_t ctx, mmu_vaddr_t virt_addr,
 		struct mmu_translate_info * mmu_translate_info);
 
