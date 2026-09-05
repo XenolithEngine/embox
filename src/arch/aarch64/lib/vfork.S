@@ -11,7 +11,8 @@
 
 vfork:
 	/* Fill struct pt_regs on current stack */
-	sub sp, sp, #31 * 8
+	/* 32 slots: x0..x30 and the caller's stack pointer. */
+	sub sp, sp, #32 * 8
 	stp x0, x1,   [sp]
 	stp x2, x3,   [sp, #16] !
 	stp x4, x5,   [sp, #16] !
@@ -27,7 +28,7 @@ vfork:
 	stp x24, x25, [sp, #16] !
 	stp x26, x27, [sp, #16] !
 	stp x28, x29, [sp, #16] !
-	add x2, sp, 0x18
+	add x2, sp, 0x20
 	stp x30, x2, [sp, #16] ! 
 	/* x0 should point to the structure accroding to ABI */
 	mov x0, sp

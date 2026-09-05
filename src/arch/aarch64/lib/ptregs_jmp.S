@@ -10,10 +10,11 @@
 .global ptregs_jmp
 
 ptregs_jmp:
-	add     x0, x0, #29 * 8
-	ldp	x29, x30, [x0]
-	add	sp, x29, 0
-	sub     x0, x0, #29 * 8
+	/* SP comes from its own slot, not from the saved x29: the frame
+	 * pointer can sit above the caller's live locals. */
+	ldr	x30, [x0, #30 * 8]
+	ldr	x1, [x0, #31 * 8]
+	mov	sp, x1
 	mov	x29, x0
 	ldp     x0, x1, [x29]
 	ldp     x2, x3, [x29, #16]!
