@@ -53,18 +53,18 @@ SECTIONS {
 
 		ALIGNMENT();
 		_ctors_start = .;
-		KEEP(*(.init_array))
-		KEEP(*(.init_array.*))
-		KEEP(*(.ctors))
-		KEEP(*(.ctors.*))
+		/* Priority first, sorted by priority; then the unprioritised ones.
+		 * See board/embox-qemu/patches/image.lds-init-priority.py. */
+		KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*)))
+		KEEP(*(.init_array .ctors))
 		_ctors_end   = .;
 
 		ALIGNMENT();
 		_dtors_start = .;
-		KEEP(*(.fini_array))
-		KEEP(*(.fini_array.*))
-		KEEP(*(.dtors))
-		KEEP(*(.dtors.*))
+		/* Walked in reverse by cxx_invoke_destructors(), so the unprioritised
+		 * ones go first here and the sorted prioritised ones last. */
+		KEEP(*(.fini_array .dtors))
+		KEEP(*(SORT_BY_INIT_PRIORITY(.fini_array.*) SORT_BY_INIT_PRIORITY(.dtors.*)))
 		_dtors_end   = .;
 
 		ALIGNMENT();
