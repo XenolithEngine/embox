@@ -112,6 +112,10 @@ struct tcp_sock {
 	struct timeval rcv_time;    /* The time when last message was received (ONLY FOR TCP_TIMEWAIT) */
 	unsigned int dup_ack;       /* Amount of duplicated packets */
 	unsigned int rexmit_mode;   /* Socket in rexmit mode */
+	/* Segments inside the window but past a hole, waiting for what is
+	 * missing. See board/embox-qemu/patches/tcp-reassembly-queue.py. */
+	struct sk_buff_head rcv_ooo;
+	uint32_t rcv_ooo_len;       /* data bytes held there */
 };
 
 static inline struct tcp_sock * to_tcp_sock( const struct sock *sk) {
@@ -173,6 +177,13 @@ extern void send_seq_from_sock(struct tcp_sock *tcp_sk, struct sk_buff *skb);
 extern uint16_t tcp_self_wind_value(struct tcp_sock *tcp_sk);
 extern uint16_t tcp_self_wind_emit(struct tcp_sock *tcp_sk);
 extern void tcp_send_wind_update(struct tcp_sock *tcp_sk);
+
+/* The out-of-order queue: set up, torn down, filled by pre_process and
+ * drained whenever the in-order sequence advances. */
+extern void tcp_ooo_init(struct tcp_sock *tcp_sk);
+extern void tcp_ooo_purge(struct tcp_sock *tcp_sk);
+extern int tcp_ooo_queue(struct tcp_sock *tcp_sk, struct sk_buff *skb);
+extern void tcp_ooo_drain(struct tcp_sock *tcp_sk);
 extern int tcp_sock_get_status(struct tcp_sock *tcp_sk);
 
 #endif /* NET_L4_TCP_H_ */
