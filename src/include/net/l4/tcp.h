@@ -166,6 +166,13 @@ extern void tcp_sock_unlock(struct tcp_sock *sk, unsigned int obj);
 extern int alloc_prep_skb(struct tcp_sock *tcp_sk, size_t opt_len,
 		size_t *data_len, struct sk_buff **out_skb);
 extern void send_seq_from_sock(struct tcp_sock *tcp_sk, struct sk_buff *skb);
+
+/* The window to advertise, from free receive-queue space, and the bare ACK
+ * that carries a reopened one. See board/embox-qemu/patches/
+ * tcp-recv-backpressure.py. */
+extern uint16_t tcp_self_wind_value(struct tcp_sock *tcp_sk);
+extern uint16_t tcp_self_wind_emit(struct tcp_sock *tcp_sk);
+extern void tcp_send_wind_update(struct tcp_sock *tcp_sk);
 extern int tcp_sock_get_status(struct tcp_sock *tcp_sk);
 
 #endif /* NET_L4_TCP_H_ */
