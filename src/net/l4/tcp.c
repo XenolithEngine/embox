@@ -1158,12 +1158,16 @@ static enum tcp_ret_code pre_process(struct tcp_sock *tcp_sk,
 		rem_len = tcp_sk->self.wind.size;
 		if (seq2rem_seq < rem_len) {
 			if (seq2rem_seq != 0) {
-				/* TODO There is correct packet (with
-				 * correct sequence number), but some packages
-				 * was lost. We should save this skb, and wait
-				 * previous packages.
-				 */
-				return TCP_RET_DROP;
+				/* In window, but past a hole: something was lost.
+				 * TODO: hold this skb until the hole is filled; without
+				 * a reassembly queue it is discarded.
+				 *
+				 * Re-ACKing what we still wait for is a duplicate ACK,
+				 * so the peer can fast retransmit instead of waiting
+				 * for its timer. TCP_RET_SEND reuses this skb as the
+				 * reply, as the already-seen branch below does. */
+				tcp_set_ack_field(out_tcph, tcp_sk->rem.seq);
+				return TCP_RET_SEND;
 			}
 		}
 		else if ((seq_last2rem_seq != 0)
