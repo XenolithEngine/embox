@@ -5,4 +5,9 @@ module usermode {
 
 	depends embox.arch.usermode
 	depends embox.kernel.thread.core
+
+	/* XENOLITH_EL0_ENTRY: usermode_trampoline installs the task's TTBR0. */
+	depends embox.kernel.task.resource.mmap
+	@NoRuntime depends embox.arch.mmu
+	@NoRuntime depends embox.mem.mmap_header
 }
