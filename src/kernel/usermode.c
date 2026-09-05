@@ -10,6 +10,9 @@
 #include <assert.h>
 
 #include <mem/misc/pool.h>
+#include <hal/mmu.h>
+#include <mem/mmap.h>
+#include <kernel/task/resource/mmap.h>
 #include <kernel/usermode.h>
 #include <kernel/thread.h>
 #include <util/err.h>
@@ -34,6 +37,14 @@ static void usermode_trampoline(struct ue_data *data) {
 		pool_free(&ue_data_pool, data);
 	}
 	sched_unlock();
+
+	/* XENOLITH_EL0_ENTRY: put this task's translation tables in TTBR0.
+	   Embox switches address spaces at vmem init and at task teardown and
+	   nowhere else -- the scheduler does not touch TTBR0 -- so without this
+	   the eret below would run EL0 code against the kernel task's root,
+	   where the user pages do not exist. Doing it per context switch costs a
+	   full TLBI on every switch and wants real ASIDs first (K6). */
+	mmu_set_context(task_self_resource_mmap()->ctx);
 
 	usermode_entry(&s_data);
 }

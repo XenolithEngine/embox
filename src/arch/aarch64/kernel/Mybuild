@@ -19,3 +19,16 @@ module mem_barriers extends embox.arch.mem_barriers {
 module cpu_idle extends embox.arch.cpu_idle {
 	source "cpu_idle.h"
 }
+
+/* XENOLITH_EL0_ENTRY: the arch half of embox.kernel.usermode, mirroring
+   embox.arch.x86.usermode. Without it embox.arch.usermode resolves to the
+   generic nousermode stub and nothing can reach EL0. */
+module usermode extends embox.arch.usermode {
+	source "usermode_entry.S"
+	source "usermode_exit.c"
+
+	/* aarch64_usermode_dead() ends the thread. sync_handler.c keeps only a
+	   weak stub so embox.arch.aarch64.exceptions -- which every image has --
+	   does not grow a dependency on the thread layer. */
+	depends embox.kernel.thread.core
+}

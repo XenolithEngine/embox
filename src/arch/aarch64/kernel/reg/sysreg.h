@@ -158,6 +158,12 @@
 #define ESR_ELn_EC_SHIFT                       26
 #define ESR_ELn_EC_UNKNOWN                     0x00
 #define ESR_ELn_EC_SIMD                        0x07
+/* XENOLITH_EL0_ENTRY: taken from a lower EL. The INST_ABT/DATA_ABT constants
+   below are the same-EL variants (0x21/0x25); a fault in EL0 raises 0x20/0x24
+   and a syscall raises 0x15, none of which upstream names. */
+#define ESR_ELn_EC_SVC64                       0x15
+#define ESR_ELn_EC_INST_ABT_LOW                0x20
+#define ESR_ELn_EC_DATA_ABT_LOW                0x24
 #define ESR_ELn_EC_INST_ABT                    0x21
 #define ESR_ELn_EC_DATA_ABT                    0x25
 #define ESR_ELn_EC_SERROR                      0x2f
