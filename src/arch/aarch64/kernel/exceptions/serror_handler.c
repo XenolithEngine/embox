@@ -13,6 +13,10 @@
 
 #include "exception.h"
 
+/* Xenolith: write this report to the SD card before the machine stops, so a
+ * board with no serial adapter still gets its post-mortem. See
+ * board/embox-rpi4/patches/aarch64-fault-flush.py. Weak: no log, no call. */
+extern void xenolith_fault_flush(void) __attribute__((weak));
 
 void _NORETURN aarch64_serror_handler(struct excpt_context *ctx) {
 	uint32_t esr = ARCH_REG_LOAD(ESR_EL1);
@@ -38,5 +42,9 @@ void _NORETURN aarch64_serror_handler(struct excpt_context *ctx) {
 	    (uint64_t)ARCH_REG_LOAD(FAR_EL1));
 
 	aarch64_print_excpt_context(ctx);
+	if (xenolith_fault_flush) {
+		xenolith_fault_flush();
+	}
+
 	while (1) {};
 }

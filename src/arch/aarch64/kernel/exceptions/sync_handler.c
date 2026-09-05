@@ -56,6 +56,11 @@
 
 #include "exception.h"
 
+/* Xenolith: write this report to the SD card before the machine stops, so a
+ * board with no serial adapter still gets its post-mortem. See
+ * board/embox-rpi4/patches/aarch64-fault-flush.py. Weak: no log, no call. */
+extern void xenolith_fault_flush(void) __attribute__((weak));
+
 /* Xenolith: on a board with no UART the screen is the only console, and this
  * handler spins with interrupts masked -- so printk above goes to a serial
  * port nobody is listening to and to a RAM ring whose writer is a thread
@@ -90,6 +95,10 @@ extern void fault_screen_show(const char *what, uint64_t esr, uint64_t far,
 __attribute__((weak)) void _NORETURN aarch64_usermode_dead(uint64_t reason) {
 	log_raw(LOG_EMERG, "\nEL0 exception with no usermode support (reason %#" PRIx64 ")\n",
 	    reason);
+	if (xenolith_fault_flush) {
+		xenolith_fault_flush();
+	}
+
 	while (1) {};
 }
 
