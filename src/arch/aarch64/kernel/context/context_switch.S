@@ -1,23 +1,17 @@
 /**
  * @file context_switch.S
- * @brief
- * @author Denis Deryugin <deryugin.denis@gmail.com>
- * @version
- * @date 19.07.2019
+ * @brief Save/restore GPRs in the TCB (upstream 120-byte layout) and
+ *        push q0–q31 onto the thread stack *before* recording SP.
+ *
+ * Storing Q below the saved SP is invalid on AAPCS64 (no red zone; the
+ * next IRQ's sub sp overwrites it). Lower SP, save Q, then save that SP.
+ * context_init reserves 512 bytes at stack top so the first restore is safe.
  */
-
-/* Callee-saved GPRs go to struct context, q0-q31 go onto the thread stack
- * right below the saved SP. The order matters: SP has to be lowered before
- * the registers are stored, because AAPCS64 has no red zone - anything
- * written below SP is fair game for the next exception frame. */
-#define FPSIMD_FRAME 512
-
 .text
 .global context_switch
 context_switch:
-	/* Save current context (struct context) */
-	sub     sp, sp, #FPSIMD_FRAME
-#ifdef __ARM_NEON
+	/* x0 = save (current), x1 = load (next) */
+	sub     sp, sp, #512
 	stp     q0, q1, [sp, #0]
 	stp     q2, q3, [sp, #32]
 	stp     q4, q5, [sp, #64]
@@ -34,7 +28,6 @@ context_switch:
 	stp     q26, q27, [sp, #416]
 	stp     q28, q29, [sp, #448]
 	stp     q30, q31, [sp, #480]
-#endif	
 
 	mov     x2, sp
 	mrs     x3, spsr_el1
@@ -48,7 +41,6 @@ context_switch:
 	stp     x2, x3, [x0, #96]
 	str     x4, [x0, #112]
 
-	/* Load previous context (struct context) */
 	ldp     x19, x20, [x1, #0]
 	ldp     x21, x22, [x1, #16]
 	ldp     x23, x24, [x1, #32]
@@ -58,9 +50,6 @@ context_switch:
 	ldp     x2, x3, [x1, #96]
 	ldr     x4, [x1, #112]
 	mov     sp, x2
-	// msr spsr_el1, x3
-
-#ifdef __ARM_NEON
 	ldp     q0, q1, [sp, #0]
 	ldp     q2, q3, [sp, #32]
 	ldp     q4, q5, [sp, #64]
@@ -77,9 +66,6 @@ context_switch:
 	ldp     q26, q27, [sp, #416]
 	ldp     q28, q29, [sp, #448]
 	ldp     q30, q31, [sp, #480]
-#endif	
-	add     sp, sp, #FPSIMD_FRAME
-
+	add     sp, sp, #512
 	msr     daif, x4
-
-	ret     /* Jump to x30 */
+	ret
