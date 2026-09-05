@@ -454,6 +454,41 @@ static void send_rst_reply(struct sk_buff *skb) {
 }
 
 /**
+ * The receive window this socket should advertise: what is left of the
+ * budget after everything already queued and not yet read.
+ *
+ * self.wind.size is the budget in bytes and is also what tcp_data_process()
+ * accepts as in-window, so the two cannot disagree.
+ */
+uint16_t tcp_self_wind_value(struct tcp_sock *tcp_sk) {
+	size_t budget, used, avail;
+
+	assert(tcp_sk != NULL);
+
+	budget = tcp_sk->self.wind.size;
+	used = to_sock(tcp_sk)->rx_data_len;
+	avail = used < budget ? budget - used : 0;
+	avail >>= tcp_sk->self.wind.factor;
+
+	return avail > 0xffffu ? (uint16_t)0xffffu : (uint16_t)avail;
+}
+
+/**
+ * The same value, recorded as the one the peer has been told.
+ *
+ * self.wind.value stops being the constant it was initialised with and
+ * becomes the LAST ADVERTISED window, which is the only thing that makes
+ * "the peer does not know there is room now" answerable. Every place that
+ * builds an outgoing header goes through here.
+ */
+uint16_t tcp_self_wind_emit(struct tcp_sock *tcp_sk) {
+	uint16_t wind = tcp_self_wind_value(tcp_sk);
+
+	tcp_sk->self.wind.value = wind;
+	return wind;
+}
+
+/**
  * Send any packet without sequence (i.e. seq_len is 0)
  */
 static void send_nonseq_from_sock(struct tcp_sock *tcp_sk,
@@ -462,6 +497,30 @@ static void send_nonseq_from_sock(struct tcp_sock *tcp_sk,
 	tcp_set_seq_field(skb->h.th, tcp_sk->self.seq);
 	tcp_set_check_field(skb->h.th, skb->nh.raw);
 	tcp_xmit(skb, tcp_sk, NULL);
+}
+
+/**
+ * Tell the peer the queue drained. Called from tcp_recvmsg once the
+ * application has taken data out, because a window that only ever shrinks
+ * stops the transfer and waits for a persist probe.
+ */
+void tcp_send_wind_update(struct tcp_sock *tcp_sk) {
+	struct sk_buff *skb;
+	in_port_t dst_port, src_port;
+
+	assert(tcp_sk != NULL);
+
+	skb = NULL; /* alloc new pkg */
+	if (0 != alloc_prep_skb(tcp_sk, 0, NULL, &skb)) {
+		return; /* no buffer: the peer's persist timer still covers us */
+	}
+
+	dst_port = sock_inet_get_dst_port(to_sock(tcp_sk));
+	src_port = sock_inet_get_src_port(to_sock(tcp_sk));
+	tcp_build(skb->h.th, dst_port, src_port, TCP_MIN_HEADER_SIZE,
+			tcp_self_wind_emit(tcp_sk));
+	tcp_set_ack_field(skb->h.th, tcp_sk->rem.seq);
+	send_nonseq_from_sock(tcp_sk, skb);
 }
 
 /**
@@ -1183,7 +1242,7 @@ static int tcp_handle(struct tcp_sock *tcp_sk, struct sk_buff *skb,
 	struct sk_buff *out_skb;
 
 	tcp_build(&out_tcph, skb->h.th->source, skb->h.th->dest,
-			TCP_MIN_HEADER_SIZE, tcp_sk->self.wind.value);
+			TCP_MIN_HEADER_SIZE, tcp_self_wind_emit(tcp_sk));
 	out_skb = NULL;
 
 	/**

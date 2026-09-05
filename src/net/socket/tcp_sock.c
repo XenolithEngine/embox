@@ -114,7 +114,7 @@ int send_rst_from_socket(struct tcp_sock *tcp_sk){
     dst_port = sock_inet_get_dst_port(to_sock(tcp_sk));
     src_port = sock_inet_get_src_port(to_sock(tcp_sk));
     tcp_build(tcph, dst_port, src_port, TCP_MIN_HEADER_SIZE,
-            tcp_sk->self.wind.value);
+            tcp_self_wind_emit(tcp_sk));
     tcph->rst = 1;
     tcp_sk->rem.seq++;
     tcp_set_ack_field(tcph, tcp_sk->rem.seq);
@@ -186,7 +186,7 @@ static int tcp_close(struct sock *sk) {
 			dst_port = sock_inet_get_dst_port(to_sock(tcp_sk));
 			src_port = sock_inet_get_src_port(to_sock(tcp_sk));
 			tcp_build(tcph, dst_port, src_port, TCP_MIN_HEADER_SIZE,
-					tcp_sk->self.wind.value);
+					tcp_self_wind_emit(tcp_sk));
 			tcph->fin = 1;
 			tcp_set_ack_field(tcph, tcp_sk->rem.seq);
 			send_seq_from_sock(tcp_sk, skb);
@@ -249,7 +249,7 @@ static int tcp_connect(struct sock *sk,
 			src_port = sock_inet_get_src_port(to_sock(tcp_sk));
 			tcp_build(tcph, dst_port, src_port,
 					TCP_MIN_HEADER_SIZE + sizeof(magic_opts),
-					tcp_sk->self.wind.value);
+					tcp_self_wind_emit(tcp_sk));
 			tcph->syn = 1;
 			memcpy(&tcph->options, &magic_opts[0], sizeof magic_opts);
 			send_seq_from_sock(tcp_sk, skb);
@@ -492,7 +492,7 @@ static int tcp_write(struct tcp_sock *tcp_sk, struct msghdr * msg) {
 			dst_port = sock_inet_get_dst_port(to_sock(tcp_sk));
 			src_port = sock_inet_get_src_port(to_sock(tcp_sk));
 			tcp_build(skb->h.th, dst_port, src_port, TCP_MIN_HEADER_SIZE,
-					tcp_sk->self.wind.value);
+					tcp_self_wind_emit(tcp_sk));
 		}
 
 		cp_len = min(iov_len, skb_len);
@@ -628,8 +628,35 @@ static int tcp_recvmsg(struct sock *sk, struct msghdr *msg,
 		/* fallthrough */
 	case TCP_ESTABIL:
 	case TCP_FINWAIT_1:
-	case TCP_FINWAIT_2:
-		return sock_stream_recvmsg(to_sock(tcp_sk), msg, flags);
+	case TCP_FINWAIT_2: {
+		/* An advertised window that only ever shrinks is not flow control,
+		 * it is a stall: the sender stops at zero and waits for a persist
+		 * probe. So tell it when the queue drains.
+		 *
+		 * The comparison is against what was LAST ADVERTISED, not against
+		 * this call's starting point. The first version of this compared
+		 * before and after one recvmsg(), which is wrong twice over: curl
+		 * reads 16 KiB at a time, so no single call ever frees the quarter
+		 * of a window the threshold asked for, and "the window was exactly
+		 * zero when this call started" almost never happens either. The
+		 * board showed it exactly -- 571 KB in a burst, then 25 seconds of
+		 * silence with tx frozen while the reader drained and said nothing,
+		 * waiting out the peer's persist timer. Zero frames lost the whole
+		 * time: the backpressure worked, the announcement did not. */
+		int ret = sock_stream_recvmsg(to_sock(tcp_sk), msg, flags);
+		uint16_t sent = tcp_sk->self.wind.value;
+		uint16_t live = tcp_self_wind_value(tcp_sk);
+		uint16_t full = (uint16_t)(tcp_sk->self.wind.size
+				>> tcp_sk->self.wind.factor);
+
+		/* A quarter of the buffer, the usual silly-window rule: often
+		 * enough that the sender is never idle, rare enough that reading a
+		 * byte does not put an ACK on the wire. */
+		if ((ret >= 0) && (live > sent) && ((live - sent) >= (full >> 2))) {
+			tcp_send_wind_update(tcp_sk);
+		}
+		return ret;
+	}
 	case TCP_CLOSING:
 	case TCP_LASTACK:
 	case TCP_TIMEWAIT:
