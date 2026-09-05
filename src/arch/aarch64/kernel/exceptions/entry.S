@@ -1,27 +1,19 @@
 /**
  * @file
- * @brief
+ * @brief Exception entry with FPSIMD save (Xenolith overlay).
  *
- * @date 17.07.2019
- * @author Denis Deryugin <deryugin.denis@gmail.com>
+ * Upstream vectors only stash x0–x30. IRQ handlers (and C code they call)
+ * clobber q0–q31; FreeType then writes heap metadata with garbage.
+ *
+ * GPR frame stays 34×8 so struct excpt_context is unchanged. Q0–Q31 +
+ * fpsr/fpcr sit after it. Vectors stay within the 32-instruction slot by
+ * bouncing to excpt_entry_common.
  */
+#define EXCPT_GPRS		(8 * 34)
+#define EXCPT_Q			(16 * 32)
+#define EXCPT_SYS		16
+#define EXCPT_FRAME		(EXCPT_GPRS + EXCPT_Q + EXCPT_SYS)
 
-/* Exception frame:
- *
- *   [sp                              ] x0-x29, lr, sp, elr_el1, spsr_el1
- *   [sp + EXCPT_GPRS                 ] q0-q31
- *   [sp + EXCPT_GPRS + EXCPT_Q       ] fpsr, fpcr
- *
- * The GPR part is struct excpt_context and keeps its layout. */
-#define EXCPT_GPRS  (8 * 34)
-#define EXCPT_Q     (16 * 32)
-#define EXCPT_SYS   16
-#define EXCPT_FRAME (EXCPT_GPRS + EXCPT_Q + EXCPT_SYS)
-
-/* All vectors are 128 byte aligned and limited to 32 instructions, which
- * is not enough for the FPSIMD part, so a vector only stores what it needs
- * to pass on (the EL it was taken from and the handler) and branches to the
- * common entry code. */
 .macro excpt_vector el:req fn:req
 .align 7
 	sub     sp, sp, #EXCPT_FRAME
@@ -35,33 +27,26 @@
 .section .text.kernel_vectors
 .global aarch64_kernel_vectors
 
-/* Vector tables must be placed at a 2KB-aligned address */
 .align 11
 aarch64_kernel_vectors:
-	/* EL1t */
 	excpt_vector 1, aarch64_sync_handler
 	excpt_vector 1, aarch64_irq_handler
 	excpt_vector 1, aarch64_fiq_handler
 	excpt_vector 1, aarch64_serror_handler
-	/* EL1h */
 	excpt_vector 1, aarch64_sync_handler
 	excpt_vector 1, aarch64_irq_handler
 	excpt_vector 1, aarch64_fiq_handler
 	excpt_vector 1, aarch64_serror_handler
-	/* EL0 64-bit */
 	excpt_vector 0, aarch64_sync_handler
 	excpt_vector 0, aarch64_irq_handler
 	excpt_vector 0, aarch64_fiq_handler
 	excpt_vector 0, aarch64_serror_handler
-	/* EL0 32-bit */
 	excpt_vector 0, aarch64_sync_handler
 	excpt_vector 0, aarch64_irq_handler
 	excpt_vector 0, aarch64_fiq_handler
 	excpt_vector 0, aarch64_serror_handler
 
-/* x0 = source EL, x1 = handler, x0-x3 already stored */
 excpt_entry_common:
-	/* Store x4-x29 regs */
 	stp     x4, x5, [sp, #(8 * 4)]
 	stp     x6, x7, [sp, #(8 * 6)]
 	stp     x8, x9, [sp, #(8 * 8)]
@@ -75,8 +60,6 @@ excpt_entry_common:
 	stp     x24, x25, [sp, #(8 * 24)]
 	stp     x26, x27, [sp, #(8 * 26)]
 	stp     x28, x29, [sp, #(8 * 28)]
-#ifdef __ARM_NEON
-	/* Store q0-q31 */
 	add     x2, sp, #EXCPT_GPRS
 	stp     q0, q1, [x2, #0]
 	stp     q2, q3, [x2, #32]
@@ -94,13 +77,10 @@ excpt_entry_common:
 	stp     q26, q27, [x2, #416]
 	stp     q28, q29, [x2, #448]
 	stp     q30, q31, [x2, #480]
-	/* Store fpsr, fpcr */
 	mrs     x3, fpsr
 	mrs     x4, fpcr
 	add     x5, sp, #(EXCPT_GPRS + EXCPT_Q)
 	stp     x3, x4, [x5]
-#endif
-	/* Store lr, sp, pc, psr */
 	cbz     x0, 1f
 	add     x10, sp, #EXCPT_FRAME
 	b       2f
@@ -111,15 +91,12 @@ excpt_entry_common:
 	mrs     x12, spsr_el1
 	stp     x30, x10, [sp, #(8 * 30)]
 	stp     x11, x12, [sp, #(8 * 32)]
-	/* Call the handler */
 	mov     x2, x1
 	mov     x0, sp
 	ldr     x30, =excpt_exit
 	br      x2
 
 excpt_exit:
-#ifdef __ARM_NEON
-	/* Load q0-q31 */
 	add     x2, sp, #EXCPT_GPRS
 	ldp     q0, q1, [x2, #0]
 	ldp     q2, q3, [x2, #32]
@@ -137,18 +114,14 @@ excpt_exit:
 	ldp     q26, q27, [x2, #416]
 	ldp     q28, q29, [x2, #448]
 	ldp     q30, q31, [x2, #480]
-	/* Load fpsr, fpcr */
 	add     x5, sp, #(EXCPT_GPRS + EXCPT_Q)
 	ldp     x3, x4, [x5]
 	msr     fpsr, x3
 	msr     fpcr, x4
-#endif
-	/* Load lr, pc, psr */
 	ldp     x30, x10, [sp, #(8 * 30)]
 	ldp     x11, x12, [sp, #(8 * 32)]
 	msr     elr_el1, x11
 	msr     spsr_el1, x12
-	/* Load x0-x29 regs */
 	ldp     x0, x1, [sp, #(8 * 0)]
 	ldp     x2, x3, [sp, #(8 * 2)]
 	ldp     x4, x5, [sp, #(8 * 4)]
@@ -164,6 +137,5 @@ excpt_exit:
 	ldp     x24, x25, [sp, #(8 * 24)]
 	ldp     x26, x27, [sp, #(8 * 26)]
 	ldp     x28, x29, [sp, #(8 * 28)]
-	/* Return from exception */
 	add     sp, sp, #EXCPT_FRAME
 	eret
