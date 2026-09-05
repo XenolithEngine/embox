@@ -104,6 +104,12 @@ SECTIONS {
 		*(.sbss)
 		*(.sbss.*)
 		*(.bss.[a-zA-Z0-9_-]*) /* this hell is to exclude '.bss..reserve'. */
+		/* ... and it excludes clang's .bss..L_MergedGlobals with it, which
+		 * then lands past _reserve_end as an orphan and is never zeroed.
+		 * '.L' is the local-label prefix, so this matches the compiler's own
+		 * sections and nothing else. See
+		 * board/embox-qemu/patches/image.lds-bss-merged-globals.py. */
+		*(.bss..L*)
 		/* *(.tbss) */
 		/* *(.tbss.*) */
 
