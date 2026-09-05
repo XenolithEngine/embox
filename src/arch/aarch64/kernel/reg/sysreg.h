@@ -449,6 +449,10 @@
 #define SCTLR_ELn_C                            (1U << 2) /* Data cache enable */
 #define SCTLR_ELn_SA                           (1U << 3) /* Stack alignment check enable */
 #define SCTLR_ELn_I                            (1U << 12) /* Instruction cache enable */
+/* XENOLITH_EL0_MMU: Set Privileged Access Never on taking an exception to EL1.
+   SPAN=1 means PSTATE.PAN is NOT set on entry, i.e. EL1 keeps access to pages
+   with AP[1]=1. It is one of the SCTLR_EL1_RES1 bits above. */
+#define SCTLR_ELn_SPAN                         (1U << 23)
 
 /** Translation Control Register (EL1) */
 #define TCR_EL1                                TCR_EL1
@@ -456,6 +460,10 @@
 #define __ARCH_REG_STORE__TCR_EL1(val)         __MSR_SYS(TCR_EL1, val)
 
 #define TCR_EL1_A1                             (1UL << 22) /* TTBR0_EL1 or TTBR1_EL1 defines the ASID */
+
+/* XENOLITH_EL0_MMU: translation table walk disable for TTBR1_EL1. With it set
+   a TLB miss in the high half is a translation fault instead of a walk. */
+#define TCR_EL1_EPD1                           (1UL << 23)
 
 #define TCR_EL1_TG1                            /* TTBR1_EL1 Granule Size */
 #define TCR_EL1_TG1_MASK                       0b11UL
