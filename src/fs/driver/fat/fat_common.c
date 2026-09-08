@@ -1643,14 +1643,12 @@ uint32_t fat_read_file(struct fat_file_info *fi, uint8_t *p_scratch,
 		}
 
 		*successcount += bytesread;
-		/* check to see if we stepped over a cluster boundary */
-		if (div(fi->pointer - bytesread, clastersize).quot !=
-			div(fi->pointer, clastersize).quot) {
-			if (fat_is_end_of_chain(fsi, fi->cluster)) {
-				result = DFS_EOF;
-			} else {
-				fi->cluster = fat_get_fat(fsi, p_scratch, fi->cluster);
-			}
+
+		/* A pass that copied nothing cannot be repeated to any purpose: with
+		 * `remain' unchanged this is an endless loop. Bad geometry is caught
+		 * above; this catches whatever else gets here. */
+		if (bytesread == 0) {
+			result = DFS_ERRMISC;
 		}
 	}
 
@@ -1696,6 +1694,25 @@ uint32_t fat_write_file(struct fat_file_info *fi, uint8_t *p_scratch,
 	clastersize = fi->volinfo->secperclus * fi->volinfo->bytepersec;
 
 	while (remain && result == DFS_OK) {
+		/* Advance -- and only now allocate -- when this pass actually starts
+		 * a new cluster. The old code allocated after the pass that ENDED
+		 * one, so a write of a whole number of clusters took a cluster it
+		 * never filled and every file ended with a chain longer than
+		 * itself. */
+		if (fi->pointer && (fi->pointer % clastersize) == 0) {
+			uint32_t nextclus = fat_get_fat(fsi, p_scratch, fi->cluster);
+
+			if (nextclus < 2 || fat_is_end_of_chain(fsi, nextclus)) {
+				nextclus = fat_get_free_fat(fsi, p_scratch);
+				if (nextclus == DFS_BAD_CLUS) {
+					return DFS_ERRMISC;
+				}
+				fat_set_fat(fsi, p_scratch, fi->cluster, nextclus);
+				fat_set_fat(fsi, p_scratch, nextclus, fat_end_of_chain(fsi));
+			}
+			fi->cluster = nextclus;
+		}
+
 		/*
 		 * This is a bit complicated. The sector we want to read is addressed
 		 * at a cluster granularity by  the fi->cluster member.
@@ -1808,36 +1825,6 @@ uint32_t fat_write_file(struct fat_file_info *fi, uint8_t *p_scratch,
 
 		*successcount += byteswritten;
 
-		/* check to see if we stepped over a cluster boundary */
-		if (div(fi->pointer - byteswritten, clastersize).quot !=
-				div(fi->pointer, clastersize).quot) {
-
-		  	/* We've transgressed into another cluster. If we were already
-		  	 * at EOF, we need to allocate a new cluster.
-		  	 * An act of minor evil - we use byteswritten as a scratch integer,
-		  	 * knowing that its value is not used after updating *successcount
-		  	 * above
-		  	 */
-		  	byteswritten = 0;
-
-			lastcluster = fi->cluster;
-			fi->cluster = fat_get_fat(fsi, p_scratch, fi->cluster);
-
-			/* Allocate a new cluster? */
-			if (fat_is_end_of_chain(fsi, fi->cluster)) {
-			  	uint32_t tempclus;
-				tempclus = fat_get_free_fat(fsi, p_scratch);
-				if (tempclus == DFS_BAD_CLUS)
-					return DFS_ERRMISC;
-				/* Link new cluster onto file */
-				fat_set_fat(fsi, p_scratch, lastcluster, tempclus);
-				fi->cluster = tempclus;
-				tempclus = fat_end_of_chain(fsi);
-				fat_set_fat(fsi, p_scratch, fi->cluster, tempclus);
-
-				result = DFS_OK;
-			}
-		}
 	}
 	/* If cleared, then mark free clusters*/
 	// TODO implement fat truncate
