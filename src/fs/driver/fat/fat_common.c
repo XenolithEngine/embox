@@ -236,7 +236,7 @@ int fat_create_partition(void *dev, int fat_n) {
 	uint16_t bytepersec = bdev->block_size;
 	size_t num_sect = block_dev(bdev)->size / bytepersec;
 	assert(bdev->block_size <= FAT_MAX_SECTOR_SIZE);
-	uint32_t secperfat = 1;
+	uint32_t secperfat;
 	uint16_t rootentries = 0x0200;             /* 512 for FAT16 */
 	int reserved;
 	int err;
@@ -266,6 +266,60 @@ int fat_create_partition(void *dev, int fat_n) {
 		.sig_aa = 0xAA,
 	};
 
+
+	/* Size the table for the volume.
+	 *
+	 * This was the constant 1. One 512-byte sector of FAT16 holds 256
+	 * entries, so every volume this driver formatted described its data area
+	 * honestly -- 20471 clusters on a 40 MiB one -- and had room in the table
+	 * for the first 256 of them. Writing entry 257 wrote OUTSIDE the table:
+	 * into the second FAT copy, then into the root directory.
+	 *
+	 * What that looks like from above: a write of 8 MiB reports success for
+	 * every chunk, the size is right, and the file stops early and is wrong
+	 * after it -- because the chain that describes it was written over.
+	 * Measured here before the fix:
+	 * the chain ended at cluster 558 with its FAT entry reading 0 (free), at
+	 * byte 526336 of 8388608, which is 257 clusters. Directory entries came
+	 * back as garbage after a remount for the same reason: the FAT writes had
+	 * landed in the root directory area.
+	 *
+	 * The size depends on the number of clusters and the number of clusters
+	 * depends on the size, so it is iterated -- three passes are enough for
+	 * any volume this fits on, and the loop is bounded anyway. The type is
+	 * inferred at mount from the cluster count (fat_get_volinfo: 4085 and
+	 * 65525), so the entry width is inferred here the same way rather than
+	 * from `fat_n', which the caller does not always mean literally. */
+	{
+		uint32_t root_sect = (rootentries * 32 + bytepersec - 1) / bytepersec;
+		uint32_t secperclus = lbr.bpb.secperclus;
+		uint32_t reserved_sect = 1;
+		uint32_t numfats = 2;
+
+		secperfat = 1;
+		for (i = 0; i < 8; i++) {
+			uint32_t data, clusters, bytes, want;
+
+			data = num_sect - reserved_sect - root_sect - numfats * secperfat;
+			clusters = data / secperclus + 2;
+
+			if (clusters < 4085) {
+				bytes = (clusters * 3 + 1) / 2;  /* FAT12: 12 bits each */
+			}
+			else if (clusters < 65525) {
+				bytes = clusters * 2;
+			}
+			else {
+				bytes = clusters * 4;
+			}
+
+			want = (bytes + bytepersec - 1) / bytepersec;
+			if (want <= secperfat) {
+				break;
+			}
+			secperfat = want;
+		}
+	}
 
 	if (0xFFFF > num_sect)	{
 		lbr.bpb.sectors_s_l = (uint8_t)(0x00000FF & num_sect);
