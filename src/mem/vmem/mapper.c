@@ -37,12 +37,30 @@ static struct mmu_entry *vmem_entry_get_tables(mmu_ctx_t ctx,
 	entry->table[0] = mmu_get_root(ctx);
 	entry->entries[0] = *(entry->table[0] + entry->idx[0]);
 	for (i = 1; i < MMU_LEVELS; i++) {
+		/* mmu_present() rather than a NULL next-table
+		   pointer -- a descriptor with the valid bit clear is absent whatever
+		   its body happens to contain. */
+		if (!mmu_present(i - 1, entry->table[i - 1] + entry->idx[i - 1])) {
+			break;
+		}
+
 		entry->table[i] = mmu_get(i - 1,
 		    entry->table[i - 1] + entry->idx[i - 1]);
 		if (entry->table[i] == NULL) {
 			break;
 		}
 		entry->entries[i] = *(entry->table[i] + entry->idx[i]);
+	}
+
+	/* A walk that stopped must say so at every level it
+	   did not reach. Callers reuse one struct mmu_entry across many addresses
+	   -- vmem_unmap_region() does it for every page of a range -- and a level
+	   left over from the previous address is a live pointer into a table
+	   belonging to somewhere else. Clearing them turns "we did not get there"
+	   into something the reader can test for. */
+	for (; i < MMU_LEVELS; i++) {
+		entry->table[i] = NULL;
+		entry->entries[i] = 0;
 	}
 
 	return entry;
@@ -113,13 +131,22 @@ mmu_paddr_t vmem_translate(mmu_ctx_t ctx, mmu_vaddr_t virt_addr,
 
 	vmem_entry_from_vaddr(ctx, virt_addr, &entries);
 
-	pte = entries.table[MMU_LEVELS - 1] + entries.idx[MMU_LEVELS - 1];
+	/* The walk may not have reached the last level. The
+	   caller in compat/posix/sys/mman/mmap.c already reads a zero as "not
+	   mapped"; before this it got a stale pointer dereferenced instead. */
+	pte = entries.table[MMU_LEVELS - 1]
+	          ? entries.table[MMU_LEVELS - 1] + entries.idx[MMU_LEVELS - 1]
+	          : NULL;
 
 	if (mmu_translate_info) {
 		memcpy(&mmu_translate_info->mmu_entry, &entries,
 		    sizeof(mmu_translate_info->mmu_entry));
 		mmu_translate_info->ctx = ctx;
-		mmu_translate_info->pte = mmu_pte_get(pte);
+		mmu_translate_info->pte = pte ? mmu_pte_get(pte) : 0;
+	}
+
+	if (!pte) {
+		return 0;
 	}
 
 	return (mmu_paddr_t)mmu_get(MMU_LEVELS - 1, pte)
@@ -136,6 +163,13 @@ static int vmem_page_set_flags(mmu_ctx_t ctx, mmu_vaddr_t virt_addr,
 
 	vmem_entry_get_idxs(ctx, virt_addr, &entries);
 	vmem_entry_get_tables(ctx, virt_addr, &entries);
+
+	/* Changing the protection of a page that is not
+	   mapped is an error, not a reason to dereference the level the walk
+	   stopped short of. vmem_set_flags() propagates this. */
+	if (!entry->table[MMU_LAST_LEVEL]) {
+		return -EINVAL;
+	}
 
 	pte = mmu_pte_get(
 	    entry->table[MMU_LAST_LEVEL] + entry->idx[MMU_LAST_LEVEL]);
