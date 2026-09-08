@@ -1424,7 +1424,6 @@ int fat_root_dir_record(void *bdev) {
 	struct fat_fs_info fsi;
 	uint32_t pstart, psize;
 	uint8_t pactive, ptype;
-	struct fat_dirent de;
 	int dev_blk_size = block_dev(bdev)->block_size;
 	int root_dir_sz;
 
@@ -1442,49 +1441,58 @@ int fat_root_dir_record(void *bdev) {
 		return -1;
 	}
 
-	cluster = fsi.vi.rootdir / fsi.vi.secperclus;
-
-	de = (struct fat_dirent) {
-		.name = "ROOT DIR   ",
-		.attr = ATTR_DIRECTORY,
-	};
-	fat_direntry_set_clus(&de, cluster);
-
-	fat_set_filetime(&de);
-
-	/*
-	 * write the directory entry
-	 * note that we no longer have the sector containing the directory
-	 * entry, tragically, so we have to re-read it
-	 */
-
-	/* we clear other FAT TABLE */
+	/* This used to write a directory entry named "ROOT DIR" as entry 0 of the
+	 * root, with ATTR_DIRECTORY and a start cluster of `rootdir / secperclus'.
+	 * There is no such cluster: on FAT12/16 the root is a fixed run of
+	 * sectors, and that number is a sector address divided by the cluster size
+	 * -- 40 on a 40 MiB volume, which is an ordinary data cluster belonging to
+	 * whichever file is given it.
+	 *
+	 * A mount walks the root, finds an entry saying "directory, cluster 40",
+	 * and descends into it -- which reads sectors 345..348, cluster 40's
+	 * data. On a fresh volume those are zeroes, the subdirectory looks empty,
+	 * and nothing appears to be wrong. Once a file has been written over
+	 * them, the walk reads file data as directory entries, follows the
+	 * cluster numbers it finds there into the rest of the volume, and never
+	 * returns to the remaining entries of the real root.
+	 *
+	 * Measured on a 40 MiB ramdisk with 8 MiB written: a
+	 * remounted volume listed exactly one entry, "root", while sector 161
+	 * read straight off the block device held ROOT DIR, TINY.TXT at cluster 2
+	 * and BIG.BIN at cluster 3, size 8388608 -- the files were on the disk
+	 * and the walk did not reach them.
+	 *
+	 * A FAT root directory holds no entry for itself. Clear it and write
+	 * nothing. */
 	memset(fat_sector_buff, 0, sizeof(fat_sector_buff));
-	memcpy(&(((struct fat_dirent*) fat_sector_buff)[0]), &de, sizeof(struct fat_dirent));
-
-	if (0 > block_dev_write(	bdev,
-					(char *) fat_sector_buff,
-					fsi.vi.bytepersec,
-					fsi.vi.rootdir * fsi.vi.bytepersec / dev_blk_size)) {
-		return DFS_ERRMISC;
-	}
 
 	root_dir_sz = (fsi.vi.rootentries * sizeof(struct fat_dirent) +
-	               fsi.vi.bytepersec - 1) / fsi.vi.bytepersec - 1;
+	               fsi.vi.bytepersec - 1) / fsi.vi.bytepersec;
 
-	if (root_dir_sz)
-		memset(fat_sector_buff, 0, sizeof(struct fat_dirent)); /* The rest is zeroes already */
-	/* Clear the rest of root directory */
 	while (root_dir_sz) {
-		block_dev_write(bdev,
-				(char *) fat_sector_buff,
-				fsi.vi.bytepersec,
-				(root_dir_sz + fsi.vi.rootdir) * fsi.vi.bytepersec / dev_blk_size);
 		root_dir_sz--;
+		if (0 > block_dev_write(bdev,
+		            (char *) fat_sector_buff,
+		            fsi.vi.bytepersec,
+		            (fsi.vi.rootdir + root_dir_sz) * fsi.vi.bytepersec
+		                / dev_blk_size)) {
+			return DFS_ERRMISC;
+		}
 	}
 
+	/* This used to be
+	 *
+	 *     cluster = fat_end_of_chain(&fsi);
+	 *     fat_set_fat(&fsi, fat_sector_buff, cluster, cluster);
+	 *
+	 * -- an entry for cluster 0xffff on a FAT16 volume, 128 KiB into a table
+	 * that is 40 KiB long. The write landed outside the FAT, in the data area
+	 * (sector 256 of a 40 MiB volume, inside cluster 17), and again in the
+	 * second copy's shadow of it. The entries a FAT reserves are 0 and 1: the
+	 * media descriptor and the end-of-chain mark. */
 	cluster = fat_end_of_chain(&fsi);
-	fat_set_fat(&fsi, fat_sector_buff, cluster, cluster);
+	fat_set_fat(&fsi, fat_sector_buff, 0, (cluster & ~0xffu) | 0xf8u);
+	fat_set_fat(&fsi, fat_sector_buff, 1, cluster);
 
 	return DFS_OK;
 }
