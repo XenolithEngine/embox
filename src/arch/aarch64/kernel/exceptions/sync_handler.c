@@ -41,10 +41,16 @@ static void print_abort_syndrome(uint32_t syndrome) {
 		log_raw(LOG_EMERG, "Access Flag fault (EL%i)\n", el);
 		break;
 
+	/* Levels 0..3, the low two bits of DFSC, the same shape the translation
+	 * fault above already uses. Only 0b001100 and 0b001101 were named, and
+	 * they were reported as an exception level, which this field is not -- so
+	 * a permission fault at a page (level 3, DFSC 0b001111) fell through to
+	 * "Unknown fault" and said nothing at all. */
 	case 0b001100:
-		el = 0;
 	case 0b001101:
-		log_raw(LOG_EMERG, "Permission fault (EL%i)\n", el);
+	case 0b001110:
+	case 0b001111:
+		log_raw(LOG_EMERG, "Permission fault (level %u)\n", dfsc & 0b11);
 		break;
 
 	case 0b010000:

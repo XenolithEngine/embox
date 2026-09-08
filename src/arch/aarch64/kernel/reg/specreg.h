@@ -150,7 +150,10 @@
 #define SPSR_ELn_F                       (1U << 6) /* FIQ mask bit */
 
 #define SPSR_ELn_M                       /* Mode that an exception was taken from */
-#define SPSR_ELn_M_MASK                  0xb11111U
+/* Was 0xb11111U -- a hex literal where a binary one was
+   meant, so FIELD_GET(spsr, SPSR_ELn_M) returned garbage. Nothing upstream
+   reads this field, which is why the typo survived. */
+#define SPSR_ELn_M_MASK                  0b11111U
 #define SPSR_ELn_M_SHIFT                 0
 
 #endif /* AARCH64_REG_SPECREG_H_ */
