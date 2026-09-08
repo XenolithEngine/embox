@@ -20,6 +20,10 @@ module gicv3 extends embox.driver.interrupt.irqctrl_api {
 	option number gicd_base /* GIC distributor base address */
 	option number gicr_base /* GIC redistributor base address */
 
+	/* 1 on a GIC-600/700, whose redistributors reset powered down (RK3588).
+	 * 0 everywhere else -- GICR_PWRR is not implemented there. */
+	option number gic600_pwrr = 0
+
 	source "gicv1.h"
 	source "gicv2.h"
 	source "gicv3.h"

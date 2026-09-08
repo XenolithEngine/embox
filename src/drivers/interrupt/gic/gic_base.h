@@ -22,4 +22,13 @@
 #define GICC_BASE OPTION_GET(NUMBER, gicc_base)
 #endif
 
+/* Which GIC implementation this is, where the difference is a register that
+ * only exists on one of them. Absent for a GICv1/v2 build, which has no
+ * redistributors at all. */
+#if OPTION_DEFINED(NUMBER, gic600_pwrr)
+#define GIC600_PWRR OPTION_GET(NUMBER, gic600_pwrr)
+#else
+#define GIC600_PWRR 0
+#endif
+
 #endif /* DRIVERS_INTERRUPT_GIC_GIC_UTIL_H_ */

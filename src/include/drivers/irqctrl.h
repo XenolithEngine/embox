@@ -86,6 +86,27 @@ extern int irqctrl_get_intid(void);
  */
 extern int irqctrl_set_level(unsigned int irq, int level);
 
+/* The per-CPU half of the controller, and the one operation that crosses from
+ * one CPU to another. Declared unconditionally so that this header stays one
+ * shape; referenced only from SMP code. */
+
+/**
+ * Bring up the part of the interrupt controller that belongs to the calling
+ * CPU, and only that part. irqctrl_init() has already run on the boot CPU and
+ * done the global half; a secondary calls this on itself instead.
+ */
+extern void irqctrl_init_cpu(void);
+
+/**
+ * Raise @a irq on another CPU.
+ *
+ * @param cpu_id logical id of the target, which must already have run
+ *               irqctrl_init_cpu() -- a CPU the controller has not met yet
+ *               cannot be addressed, and the call is dropped.
+ * @param irq    a software-generated interrupt number (0..15).
+ */
+extern void irqctrl_send_ipi(unsigned int cpu_id, unsigned int irq);
+
 struct irqctrl {
 	const char *name;
 	int (*init)(void);
