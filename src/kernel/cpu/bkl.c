@@ -44,6 +44,33 @@ void bkl_wait(void) {
 	}
 }
 
+/* How much the promise below is actually tested,
+ * and how often it was broken.
+ *
+ * `bkl_assert_owned()` guards the invariant and has not fired. That on its
+ * own says nothing: an assertion that never runs and an assertion that always
+ * passes look identical from outside, and this is exactly the kind of defect
+ * that hides in a path nobody enters. So the interrupt entry counts both
+ * halves --
+ *
+ *   irq_nested   an interrupt arrived while this CPU's critical count already
+ *                promised the Big Kernel Lock. This is the window. A run with
+ *                zero of these has not tested anything.
+ *   irq_unowned  ... and this CPU did not in fact hold the lock. This is the
+ *                defect. It is zero or it is not, and there is no third
+ *                answer.
+ *
+ * Both are plain unsigned longs: one increment per interrupt, on a path that
+ * already reads the lock's owner, and nothing downstream needs them to be
+ * exact to the last count -- only to be zero or not. */
+unsigned long bkl_irq_nested;
+unsigned long bkl_irq_unowned;
+/* Interrupts served at all, and of those, how many arrived with the count at
+ * zero. Without these two, "nested is zero" and "the counter is not running"
+ * read the same, which is the mistake this whole exercise is about. */
+unsigned long bkl_irq_total;
+unsigned long bkl_irq_zero;
+
 int bkl_owned(void) {
 	return bkl.owner == cpu_get_id();
 }

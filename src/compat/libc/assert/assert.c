@@ -48,6 +48,15 @@ void __assertion_handle_failure(const struct __assertion_point *point) {
 	}
 	cpudata_var(assert_recursive_lock) = 1;
 
+#ifdef SMP
+	/* Before a single character is printed. The other cores are still running,
+	 * over the console this is about to use and over the state that explains
+	 * the failure. */
+	if (smp_stop_others) {
+		smp_stop_others();
+	}
+#endif
+
 	spin_lock_ipl_disable(&assert_lock);
 
 #if BANNER_PRINT
@@ -61,6 +70,12 @@ void __assertion_handle_failure(const struct __assertion_point *point) {
 		printk("\n\t(%s)\n", __assertion_message_buff);
 
 	whereami();
+
+#ifdef SMP
+	if (smp_print_stopped) {
+		smp_print_stopped();
+	}
+#endif
 
 	spin_unlock(&assert_lock); /* leave IRQs off */
 

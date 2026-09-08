@@ -27,4 +27,12 @@ extern void bkl_assert_owned(unsigned int tested, unsigned int unit,
  * entry can count what it finds instead of dying of it. See bkl.c. */
 extern int bkl_owned(void);
 
+/* How often an interrupt landed on a non-zero critical count (the window),
+ * and how often this CPU did not in fact hold the lock when it did (the
+ * defect).  Raised by the architecture's interrupt entry. */
+extern unsigned long bkl_irq_nested;
+extern unsigned long bkl_irq_unowned;
+extern unsigned long bkl_irq_total;
+extern unsigned long bkl_irq_zero;
+
 #endif /* !KERNEL_CPU_BKL_H_ */
