@@ -236,6 +236,11 @@ struct fat_fs_info {
 	struct volinfo vi;
 	struct block_dev *bdev;
 	struct inode *root;
+	/* Where this volume's last free-cluster search stopped. A
+	 * hint only -- every candidate is verified -- and per volume, because
+	 * two mounted volumes sharing one would each throw away the other's
+	 * position. 0 or out of range means "start at the beginning". */
+	uint32_t free_hint;
 };
 
 struct fat_file_info {
