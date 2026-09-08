@@ -2205,6 +2205,33 @@ int fat_create_file(struct fat_file_info *fi, struct dirinfo *di, char *name, in
 	fat_set_fat(fsi, fat_sector_buff, fi->cluster, cluster);
 
 	if (S_ISDIR(mode)) {
+		/* Zero the whole cluster first.
+		 *
+		 * What was here wrote ONE sector of it, and wrote it out of a buffer
+		 * that fat_set_direntry() fills only the first 64 bytes of -- the
+		 * rest being whatever the previous operation left in fat_sector_buff,
+		 * which two lines above was a FAT sector. The other sectors of the
+		 * cluster were not written at all, so they kept whatever the volume
+		 * had there before.
+		 *
+		 * A directory scan reads entries until it meets a zero one. In a
+		 * directory small enough to fit its entries in the first sector that
+		 * zero is there by luck; put eight files with long names in it, so
+		 * that the scan crosses into the second sector, and the scan runs
+		 * into the leftovers. Measured on this tree's own fat_ops suite:
+		 * rmdir() of a directory whose files had all been deleted failed with
+		 * EPERM, and fat_dir_empty() was being kept non-empty by bytes that
+		 * decode as the suite's own file pattern -- old file data, still
+		 * sitting in a cluster nobody had cleared.
+		 *
+		 * fat_dir_extend() has always done this correctly for a directory
+		 * that grows. This is the same thing for a directory that is born.
+		 * fat_clear_clus() leaves the scratch buffer zeroed, which is also
+		 * what fat_set_direntry() needs and did not have. */
+		if (0 != fat_clear_clus(fsi, fi->cluster, fat_sector_buff)) {
+			return DFS_ERRMISC;
+		}
+
 		/* create . and ..  files of this catalog */
 		fat_set_direntry(di->currentcluster, fi->cluster);
 		cluster = fi->volinfo->dataarea +
