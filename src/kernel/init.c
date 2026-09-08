@@ -27,7 +27,18 @@ extern int system_abs_time_init(void);
 /**
  * The setup of the system, the run level and execution of the idle function.
  */
+/* Some cores cannot take a spinlock until translation is
+ * on -- a Cortex-A72 raises an SError on an exclusive to Device memory, and
+ * with the MMU off that is all memory. The architecture decides whether it
+ * needs this; on the ports that do not, it is an empty call. It has to be
+ * FIRST: everything below here can lock. */
+/* Weak, so a port that has no such need links without providing one. */
+void __attribute__((weak)) arch_mmu_early_on(void) {
+}
+
 void kernel_start(void) {
+	arch_mmu_early_on();
+
 	kernel_init();
 
 	kgdb_start(init);

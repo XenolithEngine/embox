@@ -3,9 +3,26 @@ package embox.arch.aarch64
 module mmu extends embox.mem.vmem {
 	source "mmu.c"
 	source "mmu.h"
+	source "mmu_early.c"
 
 	option number granule = 4 /* size of pages, in kiB, can be 4, 16 or 64 */
 	option string log_level="LOG_INFO"
+
+	/* Table walks through the caches, matching how the tables are mapped.
+	 * 0 on a board handed over by a bootloader that leaves dirty lines the
+	 * walker would read as page tables -- and such a board needs the flush
+	 * below, because a Non-cacheable walk does not snoop this cache. */
+	option number walk_cacheable = 1
+	option number pte_dcache_flush = 0
+
+	/* Turn translation on from kernel_start(), before a
+	 * module can initialise -- and therefore before the first spinlock. A
+	 * Cortex-A72 raises an SError on an exclusive to memory that is not
+	 * Normal Inner-Shareable Cacheable, and with the MMU off every access is
+	 * Device. Needed by any SMP image on an A72; harmless and off elsewhere,
+	 * because the ordinary vmem_init() path comes later and replaces this
+	 * map with whatever the system actually wants. */
+	option number early_on = 0
 
 	depends embox.mem.vmem_alloc
 	depends embox.mem.vmem_depends
