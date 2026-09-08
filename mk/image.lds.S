@@ -31,6 +31,12 @@ SECTION_SYMBOLS(bss)
 SECTIONS {
 	.text : ALIGN(TEXT_ALIGNMENT) {
 
+		/* The reset vector and the exception vector table are placed by
+		 * address, not by module: an aarch64 secondary starts executing at
+		 * a physical address the firmware chose, and the vector table has
+		 * to survive --gc-sections whether or not anything references it. */
+		KEEP(*(.bootcode));
+		KEEP(*(.text.kernel_vectors*));
 		LDS_MODULES_TEXT
 		*(.text)
 		*(.text.*)

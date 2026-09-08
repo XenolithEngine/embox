@@ -1,0 +1,57 @@
+package embox.arch.aarch64
+
+/* Overrides embox.arch.generic.onecpu, whose cpu_get_id() is `return 0`.
+ * cpu_count is what NCPU expands to, and therefore how many copies of the
+ * per-CPU block the linker script makes. */
+module cpu extends embox.arch.cpu {
+	option number cpu_count = 1
+
+	source "cpu_id.c"
+
+	@IncludeExport(path="aarch64")
+	source "cpu_id.h"
+}
+
+/* Overrides embox.arch.generic.nosmp. It defines no header, and that is the
+ * whole point: nosmp.h is where NOSMP comes from, and hal/cpu.h defines SMP
+ * in its absence. */
+module smp extends embox.arch.smp {
+	option string log_level = "LOG_INFO"
+
+	/* Which instruction carries a PSCI call: "smc", "hvc", or "" for a board
+	 * that has no PSCI at all (the Pi parks its cores on a mailbox instead).
+	 * It is not a property of the silicon -- under QEMU it follows the machine
+	 * flags the emulator was started with, so the two have to agree. */
+	option string psci_method = ""
+
+	/* Where the firmware parked the secondary cores, for a board that has
+	 * no PSCI. armstub8 leaves cores 1..3 polling one 64-bit word each at
+	 * 0xd8, 0xe0, 0xe8, 0xf0 and sleeping on WFE between reads; QEMU's
+	 * raspi model installs that same loop (hw/arm/raspi.c, write_smpboot64,
+	 * SPINTABLE_ADDR 0xd8), which is why one number serves the board and
+	 * the emulator. 0 = no spin table, which is what a PSCI board says. */
+	option number spintable_base = 0
+
+	source "smp.c"
+	source "psci.c"
+
+	@IncludeExport(path="aarch64")
+	source "psci.h"
+
+	@IncludeExport(path="aarch64")
+	source "smp.h"
+
+	depends cpu
+	depends embox.kernel.thread.core
+	depends embox.kernel.task.kernel_task
+	/* The reschedule IPI: irq_attach() for the handler, and the irqctrl the
+	 * secondaries bring up on themselves and address each other through. */
+	depends embox.kernel.irq
+	depends embox.driver.interrupt.irqctrl_api
+	/* Each secondary starts its own generic-timer tick through the clock
+	 * source the image already has -- see ap_clock_start() in smp.c. */
+	depends embox.kernel.time.jiffies
+	@NoRuntime depends embox.kernel.cpu.common
+	@NoRuntime depends embox.kernel.cpu.cpudata
+	depends embox.framework.LibFramework
+}

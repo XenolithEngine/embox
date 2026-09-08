@@ -36,6 +36,22 @@ __BEGIN_DECLS
  */
 extern unsigned int cpu_get_id(void);
 
+#ifdef SMP
+/**
+ * Halt every CPU but this one, and record what each was doing.  Called from
+ * the abort path; safe to call more than once and from more than one CPU.
+ *
+ * Weak, and only some architectures provide it: a port that has not
+ * implemented stopping its cores links and behaves exactly as it did before,
+ * which is what every caller has to be ready for anyway -- a core that has
+ * already parked in an earlier fault cannot answer either.
+ */
+extern void smp_stop_others(void) __attribute__((weak));
+
+/** Print what the stopped CPUs reported. Prints once. Weak, as above. */
+extern void smp_print_stopped(void) __attribute__((weak));
+#endif /* SMP */
+
 __END_DECLS
 
 #endif /* !__ASSEMBLER__ */
