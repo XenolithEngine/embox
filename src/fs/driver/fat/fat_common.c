@@ -1076,6 +1076,44 @@ static uint32_t fat_fetch_dir(struct dirinfo *dir) {
 		dir->currententry = 0;
 		dir->currentsector++;
 
+		/* The root directory of a FAT12/16 volume is a fixed run of
+		 * `rootentries' entries starting at `rootdir', and it is not a cluster
+		 * chain. fat_reset_dir() walks it as the pseudo-cluster `rootdir /
+		 * secperclus', so crossing a cluster boundary used to fall into the
+		 * branch below and read the FAT entry for that number -- a real data
+		 * cluster, 40 on a 40 MiB volume -- and then carry on through whatever
+		 * chain the file owning it has. 512 entries is 32 sectors where a
+		 * cluster is 4, so the walk left the root after the first 64 entries
+		 * and read file data as directory entries from there on.
+		 *
+		 * Advance linearly instead, and stop at the root's own end: a
+		 * FAT12/16 root cannot be extended, so running out of it is EOF and
+		 * not DFS_ALLOCNEW. */
+		if (dir->fi.dirsector == 0
+		    && (volinfo->filesystem == FAT12
+		        || volinfo->filesystem == FAT16)) {
+			uint32_t root_secs;
+
+			if (dir->currentsector >= volinfo->secperclus) {
+				dir->currentsector = 0;
+				dir->currentcluster++;
+			}
+			read_sector = fat_current_dirsector(dir);
+			root_secs = (volinfo->rootentries * sizeof(struct fat_dirent)
+			                + volinfo->bytepersec - 1)
+			            / volinfo->bytepersec;
+
+			if (read_sector < volinfo->rootdir
+			    || read_sector >= volinfo->rootdir + root_secs) {
+				return DFS_EOF;
+			}
+			if (fat_read_sector(fsi, dir->p_scratch, read_sector)) {
+				return DFS_ERRMISC;
+			}
+
+			return DFS_OK;
+		}
+
 		/* Root directory; special case handling
 		 * Note that currentcluster will only ever be zero if both:
 		 * (a) this is the root directory, and
