@@ -802,9 +802,10 @@ static uint32_t fat_set_fat(struct fat_fs_info *fsi, uint8_t *p_scratch,
 /* For long names string is divided in a pretty ugly way so old drivers
  * will be able to read directory content, so we need some ugly code to
  * figure it out. NOTE: we support only ASCII-charaters filenames */
-static void fat_append_longname(char *name, struct fat_dirent *di) {
+static int fat_append_longname(char *name, struct fat_dirent *di) {
 	struct fat_long_dirent *ld;
 	const int chars_per_long_entry = 13;
+	unsigned order;
 	int l;
 
 	assert(name);
@@ -812,7 +813,32 @@ static void fat_append_longname(char *name, struct fat_dirent *di) {
 
 	ld = (void *) di;
 
-	l = chars_per_long_entry * ((di->name[0] & FAT_LONG_ORDER_NUM_MASK) - 1);
+	/* The offset written to comes off the disk.
+	 *
+	 * `order' is the long-entry sequence number, 1..15 in a well-formed
+	 * directory. Nothing checked it. An order of 0 -- which is what a
+	 * half-written or recycled entry reads as -- puts the offset at -13, and
+	 * an order of 15 puts the last byte at 195, into a caller's buffer that
+	 * is NAME_MAX (32) bytes and lives on the stack. Either way this writes
+	 * disk bytes over the frame that called it, return address included.
+	 *
+	 * It takes a directory being rewritten while it is read to produce such
+	 * an entry, which is why it survived: one core writing files while
+	 * another opens them is what this tree only started doing with the
+	 * boot-core fence lifted.
+	 *
+	 * A name that does not fit is not a name. Say so and let the caller stop
+	 * rather than write outside the buffer it was given -- every caller in
+	 * the tree passes NAME_MAX. */
+	order = di->name[0] & FAT_LONG_ORDER_NUM_MASK;
+	if (order < 1) {
+		return -1;
+	}
+
+	l = chars_per_long_entry * (int)(order - 1);
+	if (l + chars_per_long_entry >= NAME_MAX) {
+		return -1;
+	}
 
 	name[l++] = (char) ld->name1[0];
 	name[l++] = (char) ld->name1[2];
@@ -833,6 +859,8 @@ static void fat_append_longname(char *name, struct fat_dirent *di) {
 	if (di->name[0] & FAT_LONG_ORDER_LAST) {
 		name[l] = '\0';
 	}
+
+	return 0;
 }
 
 /*
@@ -1225,8 +1253,13 @@ uint32_t fat_get_next_long(struct dirinfo *dir, struct fat_dirent *dirent, char 
 		}
 	} else {
 		while (dirent->attr == ATTR_LONG_NAME) {
-			if (name_buf != NULL) {
-				fat_append_longname(name_buf, dirent);
+			if (name_buf != NULL
+			    && 0 != fat_append_longname(name_buf, dirent)) {
+				/* An entry that names a piece of a name outside the buffer is
+				 * not part of a name this directory can produce. Give up on
+				 * the entry rather than write past what the caller gave us. */
+				name_buf[0] = '\0';
+				return DFS_ERRMISC;
 			}
 			ret = fat_get_next(dir, dirent);
 		}
