@@ -4,4 +4,6 @@
 "service telnetd",
 "service httpd",
 "ntpdate 0.europe.pool.ntp.org",
+"test -t fat_big",
+"test -t mount_smp",
 "tish",
