@@ -3,4 +3,6 @@
 "netmanager",
 "service telnetd",
 "service httpd",
+"test -t fat_big",
+"test -t mount_smp",
 "tish",
