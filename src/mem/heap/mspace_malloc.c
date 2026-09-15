@@ -260,8 +260,11 @@ static struct mm_segment *mm_try_alloc_segment(size_t size, size_t boundary) {
 	/* Try to allocate as much size as possible starting with 1Mb.
 	 * Why 1Mb? Don't know, magical number.. Since it should be maximum size
 	 * of all available heaps in Embox, but it's more difficult to implement. */
-	const size_t max_size = (0x100000 + PAGE_SIZE()) / PAGE_SIZE();
 	const size_t min_size = (size + boundary + PAGE_SIZE()) / PAGE_SIZE();
+	/* A request larger than the megabyte gets a segment of its own size:
+	 * the loop below runs only while max_size > min_size. */
+	const size_t max_size = max((0x100000 + PAGE_SIZE()) / PAGE_SIZE(),
+	    min_size + 1);
 	size_t i;
 	struct mm_segment *mm = NULL;
 
