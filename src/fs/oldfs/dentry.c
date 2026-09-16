@@ -22,6 +22,17 @@ int dvfs_lookup(const char *path, struct lookup *lookup) {
 
 	lookup->item = node_path.node->i_dentry;
 
+	if (lookup->item) {
+		/* dentry->flags is the inode's mode -- vfs_create() sets the two from
+		 * the same value (vfs.c: child->i_mode and child->i_dentry->flags).
+		 * An inode that did not come from vfs_create() never had it set, and
+		 * the root of a MOUNTED filesystem is exactly such an inode: so
+		 * chdir(), which asks the dentry rather than the inode, answered
+		 * ENOTDIR for every mount point in the tree. Keep the two in step
+		 * here, where the lookup hands one over for the other. */
+		lookup->item->flags = node_path.node->i_mode;
+	}
+
 	return 0;
 }
 

@@ -25,6 +25,14 @@ int stat(const char *path, struct stat *buf) {
 		return 0;
 	}
 
+	if (fd == -1) {
+		/* Falling through here called fstat(-1), which sets EBADF and so
+		 * REPLACED the reason the open failed. stat() on a path that is not
+		 * there reported "bad file handle" instead of "no such file", which is
+		 * the one answer every caller of stat() branches on. */
+		return -1;
+	}
+
 	ret = fstat(fd, buf);
 
 	close(fd);
