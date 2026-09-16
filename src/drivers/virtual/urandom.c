@@ -4,6 +4,10 @@
  *
  * @date 24.05.24
  * @author Anton Bondarev
+ *
+ * A linear congruential generator stirred with the system clock, not a CSPRNG:
+ * there is no entropy pool behind it. Enough for a hash seed or a stack
+ * cookie, not for a key.
  */
 
 #include <stddef.h>
@@ -12,18 +16,33 @@
 #include <time.h>
 
 #include <drivers/char_dev.h>
+#include <hal/ipl.h>
+#include <kernel/spinlock.h>
+
+/* The state is shared by every reader: the lock keeps two readers on two cores
+ * from being handed the same bytes. */
+static uint32_t rand_seed = 0xdeadbeaf;
+static spinlock_t rand_lock = SPIN_STATIC_UNLOCKED;
 
 static ssize_t urandom_read(struct char_dev *cdev, void *buf, size_t nbyte,
     int flags) {
-	static uint32_t rand_seed = 0xdeadbeaf;
-	int i;
+	size_t i;
+	ipl_t ipl;
 
-	for (i = 0; i < nbyte; i += 4) {
+	ipl = spin_lock_ipl(&rand_lock);
+	for (i = 0; i < nbyte; i += sizeof(rand_seed)) {
+		size_t chunk = nbyte - i;
+
 		rand_seed += clock();
 		rand_seed >>= 4;
 		rand_seed *= 0x837478;
-		memcpy(buf + i, &rand_seed, nbyte - i);
+
+		if (chunk > sizeof(rand_seed)) {
+			chunk = sizeof(rand_seed);
+		}
+		memcpy((char *)buf + i, &rand_seed, chunk);
 	}
+	spin_unlock_ipl(&rand_lock, ipl);
 
 	return nbyte;
 }
