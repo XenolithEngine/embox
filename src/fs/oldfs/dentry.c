@@ -25,6 +25,13 @@ int dvfs_lookup(const char *path, struct lookup *lookup) {
 
 	lookup->item = node_path.node->i_dentry;
 
+	if (lookup->item) {
+		/* dentry->flags mirrors the inode's mode, but only vfs_create() sets
+		 * it; the root of a mounted filesystem would have none, and chdir()
+		 * asks the dentry. */
+		lookup->item->flags = node_path.node->i_mode;
+	}
+
 	return 0;
 }
 
