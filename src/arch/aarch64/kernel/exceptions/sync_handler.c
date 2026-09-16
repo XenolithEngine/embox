@@ -116,10 +116,33 @@ __attribute__((weak)) long aarch64_syscall_dispatch(struct excpt_context *ctx) {
 	return -ENOSYS;
 }
 
+/**
+ * Ends the whole task rather than this thread. Weak for the same reason as
+ * aarch64_usermode_dead: an image without user mode has no task to end.
+ */
+__attribute__((weak)) void _NORETURN aarch64_usermode_group_dead(uint64_t status) {
+	aarch64_usermode_dead(EL0_DEAD_EXIT | (status & 0xff));
+}
+
+/**
+ * The EL0 thread bookkeeping of drivers/xlsyscall: the word to zero and the
+ * futex to wake so that whoever waits to reclaim this thread's stack learns it
+ * is finished. Weak -- an image without the syscall layer has no EL0 threads.
+ */
+__attribute__((weak)) void xl_thread_exiting(void) {
+}
+
 /* Rewrite the frame so excpt_exit returns to EL1 in aarch64_usermode_dead(). */
 static void usermode_leave(struct excpt_context *ctx, uint64_t reason) {
 	ctx->x[0] = reason;
 	ctx->pc = (uint64_t)(uintptr_t)aarch64_usermode_dead;
+	ctx->psr = SPSR_ELn_M_EL1h;
+}
+
+/* The same, for the landing that ends the task instead of the thread. */
+static void usermode_leave_group(struct excpt_context *ctx, uint64_t status) {
+	ctx->x[0] = status;
+	ctx->pc = (uint64_t)(uintptr_t)aarch64_usermode_group_dead;
 	ctx->psr = SPSR_ELn_M_EL1h;
 }
 
@@ -220,8 +243,16 @@ void aarch64_sync_handler(struct excpt_context *ctx) {
 
 	switch (class) {
 	case ESR_ELn_EC_SVC64:
-		if ((ctx->x[8] == XL_NR_EXIT) || (ctx->x[8] == XL_NR_EXIT_GROUP)) {
+		if (ctx->x[8] == XL_NR_EXIT) {
+			/* This thread only. Its stack and its TLS belong to whoever
+			 * created it, and the notification below is how they learn the
+			 * thread is done with them. */
+			xl_thread_exiting();
 			usermode_leave(ctx, EL0_DEAD_EXIT | (ctx->x[0] & 0xff));
+		}
+		else if (ctx->x[8] == XL_NR_EXIT_GROUP) {
+			xl_thread_exiting();
+			usermode_leave_group(ctx, ctx->x[0] & 0xff);
 		}
 		else {
 			ctx->x[0] = (uint64_t)aarch64_syscall_dispatch(ctx);
@@ -247,6 +278,9 @@ void aarch64_sync_handler(struct excpt_context *ctx) {
 		    (uint64_t)ctx->pc, (uint64_t)ARCH_REG_LOAD(FAR_EL1),
 		    (uint64_t)ARCH_REG_LOAD(TTBR0_EL1));
 		print_abort_syndrome(syndrome);
+		/* Killed, not exited -- and a joiner waiting for this thread's stack
+		 * has to be released either way. */
+		xl_thread_exiting();
 		usermode_leave(ctx, EL0_DEAD_FAULT | esr);
 		return;
 
@@ -260,6 +294,7 @@ void aarch64_sync_handler(struct excpt_context *ctx) {
 			log_raw(LOG_EMERG, "\nEL0 %s at PC %#" PRIx64 ", ESR %#" PRIx32 "\n",
 			    (class == ESR_ELn_EC_BRK) ? "trap" : "exception",
 			    (uint64_t)ctx->pc, esr);
+			xl_thread_exiting();
 			usermode_leave(ctx, EL0_DEAD_FAULT | esr);
 			return;
 		}

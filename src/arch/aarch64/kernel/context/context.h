@@ -19,6 +19,13 @@ struct context {
 	uint64_t sp;
 	uint64_t spsr;
 	uint64_t daif;
+	/* XENOLITH_CONTEXT_EL0: the EL0 half of a thread. The kernel runs on
+	 * SP_EL1 and never reads these, but a thread that returns to EL0 does,
+	 * and with more than one EL0 thread they differ per thread. Saved and
+	 * restored at offsets 120 and 128 by context_switch (the Xenolith FPSIMD
+	 * overlay); zero for a thread that never leaves EL1. */
+	uint64_t sp_el0;
+	uint64_t tpidr_el0;
 };
 
 #endif /* __ASSEMBLER__ */
