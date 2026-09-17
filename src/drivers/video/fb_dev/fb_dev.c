@@ -57,6 +57,9 @@ static int fb_dev_ioctl(struct char_dev *cdev, int request, void *data) {
 		finfo->smem_len = info->screen_size;
 		break;
 	default:
+		if (info->ops.fb_ioctl) {
+			return info->ops.fb_ioctl(info, request, data);
+		}
 		return -ENOSYS;
 	}
 
