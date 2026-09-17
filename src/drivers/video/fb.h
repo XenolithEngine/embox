@@ -160,6 +160,9 @@ struct fb_ops {
 	void (*fb_imageblit)(struct fb_info *info, const struct fb_image *image);
 	void (*fb_cursor)(struct fb_info *info, const struct fb_cursor *cursor);
 	int (*fb_set_base)(struct fb_info *info, void *new_base);
+	/* A request fb_dev does not know itself. -ENOSYS if the driver does not
+	 * know it either; NULL is the same as answering that to everything. */
+	int (*fb_ioctl)(struct fb_info *info, int request, void *data);
 };
 
 struct fb_info {
