@@ -226,7 +226,8 @@ static int usb_hub_port_reset(struct usb_hub *hub, unsigned int port) {
 	while (timeout--) {
 		uint16_t port_status = 0, port_change = 0;
 
-		usleep(1000 * 1000);
+		/* A port reset takes 10 to 20 ms (USB 2.0, 7.1.7.5). */
+		usleep(20 * 1000);
 
 		usb_hub_port_get_status(hub, port, &port_status, &port_change);
 		if (!(port_status & USB_PORT_STAT_RESET) &&
@@ -280,7 +281,8 @@ static int usb_device_init(struct usb_hub *hub, struct usb_dev *dev) {
 	log_debug("SET_ADDR (addr=%d) OK", addr);
 	dev->addr = addr;
 
-	usleep(1000 * 1000);
+	/* SET_ADDRESS recovery is 2 ms (USB 2.0, 9.2.6.3). */
+	usleep(10 * 1000);
 
 	return 0;
 }
