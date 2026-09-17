@@ -243,20 +243,82 @@ static int usb_hub_port_reset(struct usb_hub *hub, unsigned int port) {
 	return ret;
 }
 
+/* The device descriptor is read into this rather than into dev_desc: it is
+ * a DMA target, so it is not on the stack and it starts a cache line, and it
+ * is a full 64 bytes so that a device which ignores wLength and sends one
+ * more max-packet-sized packet does not overrun the transfer. */
+static uint8_t usb_desc_dma_buf[64] __attribute__((aligned(64)));
+
 /* This function initializes device at a given port. */
 static int usb_device_init(struct usb_hub *hub, struct usb_dev *dev) {
 	int ret;
 	uint32_t addr;
 
-	ret = usb_endp_control_wait(&dev->endp0,
-		USB_DIR_IN | USB_REQ_TYPE_STANDARD | USB_REQ_RECIP_DEVICE,
-		USB_REQ_GET_DESCRIPTOR,
-		USB_DESC_TYPE_DEV << 8,
-		0, sizeof(struct usb_desc_device), &dev->dev_desc, 1000);
-	if (ret < 0) {
-		log_error("GET_DESC failed\n");
-		return ret;
+	/* The default ep0 descriptor claims 64 bytes, a high-speed assumption.
+	 * Only 8 may be assumed before bMaxPacketSize0 is known (USB 2.0,
+	 * 9.3.5 and 9.6.1): a full- or low-speed device whose ep0 is 8 bytes
+	 * NAKs an oversized first read for ever. So read the first 8 bytes of
+	 * the descriptor with 8, adopt the size it reports, then read the
+	 * whole descriptor. */
+	dev->endp0.max_packet_size = 8;
+
+	{
+		int n;
+		enum usb_speed try_speed[2];
+		int t;
+
+		/* dev->speed is set nowhere else, and the port's low-speed bit
+		 * cannot be trusted after a handoff to the companion controller,
+		 * so try full speed and then low. */
+		try_speed[0] = USB_SPEED_FULL;
+		try_speed[1] = USB_SPEED_LOW;
+		ret = -1;
+		for (t = 0; t < 2; t++) {
+			dev->speed = try_speed[t];
+			log_debug("GET_DESC(8) at speed %d", dev->speed);
+			for (n = 0; n < 64; n++) {
+				usb_desc_dma_buf[n] = 0;
+			}
+			ret = usb_endp_control_wait(&dev->endp0,
+				USB_DIR_IN | USB_REQ_TYPE_STANDARD | USB_REQ_RECIP_DEVICE,
+				USB_REQ_GET_DESCRIPTOR,
+				USB_DESC_TYPE_DEV << 8,
+				0, 8, usb_desc_dma_buf, 1000);
+			if (ret != 0) {
+				log_debug("GET_DESC(8) at speed %d: %d", dev->speed, ret);
+				continue;
+			}
+			if (usb_desc_dma_buf[7] >= 8 && usb_desc_dma_buf[7] <= 64) {
+				dev->endp0.max_packet_size = usb_desc_dma_buf[7];
+			}
+			for (n = 0; n < 64; n++) {
+				usb_desc_dma_buf[n] = 0;
+			}
+			ret = usb_endp_control_wait(&dev->endp0,
+				USB_DIR_IN | USB_REQ_TYPE_STANDARD | USB_REQ_RECIP_DEVICE,
+				USB_REQ_GET_DESCRIPTOR,
+				USB_DESC_TYPE_DEV << 8,
+				0, 64, usb_desc_dma_buf, 1000);
+			log_debug("GET_DESC(64): %d, mps %u", ret,
+				dev->endp0.max_packet_size);
+			if (ret == 0) {
+				for (n = 0; n < (int)sizeof(struct usb_desc_device)
+						&& n < 64; n++) {
+					((uint8_t *)&dev->dev_desc)[n] = usb_desc_dma_buf[n];
+				}
+				break;
+			}
+		}
 	}
+	if (ret != 0) {
+		log_error("GET_DESC failed\n");
+		return ret < 0 ? ret : -1;
+	}
+	if (dev->dev_desc.b_max_packet_size0 >= 8
+			&& dev->dev_desc.b_max_packet_size0 <= 64) {
+		dev->endp0.max_packet_size = dev->dev_desc.b_max_packet_size0;
+	}
+
 	log_info("Device %d:%d config:"
 			"\n\t\t len=%d type=%d bcd=0x%x class=%d subclass=%d vid=0x%04x pid=0x%04x",
 			dev->bus_idx, dev->addr,
@@ -274,9 +336,9 @@ static int usb_device_init(struct usb_hub *hub, struct usb_dev *dev) {
 		USB_DIR_OUT | USB_REQ_TYPE_STANDARD | USB_REQ_RECIP_DEVICE,
 		USB_REQ_SET_ADDRESS, addr,
 		0, 0, NULL, 1000);
-	if (ret < 0) {
-		log_error("SET_ADDR (addr=%d) failed\n", addr);
-		return ret;
+	if (ret != 0) {
+		log_error("SET_ADDR (addr=%d) failed ret=%d\n", addr, ret);
+		return ret < 0 ? ret : -1;
 	}
 	log_debug("SET_ADDR (addr=%d) OK", addr);
 	dev->addr = addr;
