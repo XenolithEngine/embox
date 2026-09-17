@@ -19,12 +19,12 @@ void ehci_qtd_show(struct ehci_qtd_hw *qtd, int log_level) {
 		case LOG_DEBUG:
 			log_debug("qtd=%p, buf=0x%08x, token=0x%08x, next=0x%08x",
 							qtd, qtd->hw_buf, qtd->hw_token, qtd->hw_next);
+			break;
 		default:
 			log_error("qtd=%p, buf=0x%08x, token=0x%08x, next=0x%08x",
 							qtd, qtd->hw_buf, qtd->hw_token, qtd->hw_next);
-		break;
+			break;
 	}
-	
 }
 
 /* fill a qtd, returning how much of the buffer we were able to queue up */
@@ -124,9 +124,40 @@ static unsigned qh_completions(struct ehci_hcd *ehci, struct ehci_qh *qh) {
 	req->req_stat = USB_REQ_NOERR;
 
 	usb_queue_del(&ehci->req_queue, &qh->ehci_req->req_link);
-	usb_request_complete(req);
-
 	ehci_req_free(ehci, qh->ehci_req);
+
+	/* Interrupt IN completes here, in the interrupt handler, and is queued
+	 * again at once, the way the OHCI driver does it on WDH. Through
+	 * usb_request_complete() it would wait for an lthread that a busy
+	 * system may not run for many polling intervals. */
+	if (req->endp && req->endp->type == USB_COMM_INTERRUPT) {
+		struct ehci_qtd_hw *nqtd;
+		struct ehci_req *nreq;
+		uint32_t token;
+
+		if (req->notify_hnd) {
+			req->notify_hnd(req, req->hnd_data);
+		}
+		nqtd = ehci_qtd_alloc(ehci);
+		nreq = ehci_req_alloc(ehci);
+		if (!nqtd || !nreq) {
+			return 0;
+		}
+		token = (EHCI_QTD_PID_IN << 8) | EHCI_QTD_STS_ACTIVE
+				| (2 << EHCI_QTD_CERR_SHIFT) | EHCI_QTD_IOC;
+		if (req->len <= sizeof req->buffer) {
+			memset(req->buffer, 0, req->len);
+			ehci_qtd_fill(ehci, nqtd, (uintptr_t)req->buffer,
+					req->len, token, 0);
+		}
+		nreq->req = req;
+		nreq->qtds_head = nqtd;
+		usb_queue_add(&ehci->req_queue, &nreq->req_link);
+		ehci_submit_async(ehci, nreq);
+		return 0;
+	}
+
+	usb_request_complete(req);
 
 	/* Handle next request */
 	async_handle_next(ehci);
