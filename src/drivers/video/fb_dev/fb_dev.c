@@ -56,6 +56,28 @@ static int fb_dev_ioctl(struct char_dev *cdev, int request, void *data) {
 		finfo->smem_start = (uintptr_t)info->screen_base;
 		finfo->smem_len = info->screen_size;
 		break;
+	/* XENOLITH_FB_FLUSH_CACHE 0x4630 ('F', 0x30): clean D-cache lines to
+	 * the Point of Coherence over {void *ptr; size_t len;}. Paired with the
+	 * cacheable rk3588_simplefb mapping and the engine's post-present call.
+	 */
+#define XENOLITH_FBIO_FLUSH_CACHE 0x4630
+	case XENOLITH_FBIO_FLUSH_CACHE: {
+		struct { void *ptr; size_t len; } *r = data;
+		uint64_t ctr;
+		uintptr_t line;
+		uintptr_t p;
+		uintptr_t end;
+
+		__asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
+		line = (uintptr_t)(4u << (ctr & 0xF));
+		p = (uintptr_t)r->ptr & ~(line - 1);
+		end = (uintptr_t)r->ptr + r->len;
+		for (; p < end; p += line) {
+			__asm__ volatile("dc cvac, %0" : : "r"(p) : "memory");
+		}
+		__asm__ volatile("dsb sy" : : : "memory");
+		break;
+	}
 	default:
 		return -ENOSYS;
 	}
