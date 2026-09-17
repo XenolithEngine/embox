@@ -196,6 +196,37 @@ static void usb_dev_fill_config(struct usb_dev *dev, unsigned int n) {
 			continue;
 		}
 
+		/* Only alternate setting 0 of each interface is kept: every
+		 * descriptor used to become an entry of usb_iface[], and a composite
+		 * device with audio alternate settings ran past
+		 * USB_DEV_MAX_INTERFACES before its later interfaces were reached. */
+		if (iface_desc->b_desc_type != USB_DESC_TYPE_INTERFACE) {
+			if (iface_desc->b_length == 0) {
+				break;
+			}
+			cur += iface_desc->b_length;
+			continue;
+		}
+		if (iface_desc->b_alternate_setting != 0) {
+			cur += iface_desc->b_length;
+			while (cur < end) {
+				struct usb_desc_common_header *h = cur;
+				if (h->b_desc_type == USB_DESC_TYPE_INTERFACE
+						|| h->b_desc_type == USB_DESC_TYPE_INTERFACE_ASSOC) {
+					break;
+				}
+				if (h->b_length == 0) {
+					break;
+				}
+				cur += h->b_length;
+			}
+			continue;
+		}
+		if (i >= USB_DEV_MAX_INTERFACES) {
+			log_error("too many interfaces, skip rest");
+			break;
+		}
+
 		cur += usb_create_interface(dev, n, iface_desc, i);
 		i ++;
 	}
