@@ -244,6 +244,11 @@ static int usb_hub_port_reset(struct usb_hub *hub, unsigned int port) {
 }
 
 /* This function initializes device at a given port. */
+/* XENOLITH_GETDESC_DMA64: not on the stack; 64-byte line, extra room
+ * so a device that ignores wLength and sends another MPS packet does
+ * not DataOverrun an 18-byte TD. */
+static uint8_t xenolith_desc_dma[64] __attribute__((aligned(64)));
+
 static int usb_device_init(struct usb_hub *hub, struct usb_dev *dev) {
 	int ret;
 	uint32_t addr;
@@ -255,47 +260,59 @@ static int usb_device_init(struct usb_hub *hub, struct usb_dev *dev) {
 	/* XENOLITH_GETDESC_8: USB 2.0 9.2.6.3 - only 8 bytes of ep0 may be
 	 * assumed. Asking for 18 with MPS=8 DataOverran (CC=8) on the SEMICO
 	 * LS keyboard. Try LOW first: LSDA is 0 after EHCI companion handoff. */
+	/* XENOLITH_GETDESC_DMA64 */
 	dev->endp0.max_packet_size = 8;
 
 	{
-		uint8_t first[8];
 		int n;
 		enum usb_speed try_speed[2];
 		int t;
 
-		try_speed[0] = USB_SPEED_LOW;
-		try_speed[1] = USB_SPEED_FULL;
+		/* FS completed on this port (CC=0); LS was DeviceNotResponding. */
+		try_speed[0] = USB_SPEED_FULL;
+		try_speed[1] = USB_SPEED_LOW;
 		ret = -1;
 		for (t = 0; t < 2; t++) {
 			dev->speed = try_speed[t];
 			log_error("GET_DESC(8) try speed=%d (0=HS 1=FS 2=LS)\n",
 				dev->speed);
-			for (n = 0; n < 8; n++) {
-				first[n] = 0;
+			for (n = 0; n < 64; n++) {
+				xenolith_desc_dma[n] = 0;
 			}
 			ret = usb_endp_control_wait(&dev->endp0,
 				USB_DIR_IN | USB_REQ_TYPE_STANDARD | USB_REQ_RECIP_DEVICE,
 				USB_REQ_GET_DESCRIPTOR,
 				USB_DESC_TYPE_DEV << 8,
-				0, 8, first, 1000);
+				0, 8, xenolith_desc_dma, 1000);
 			log_error("GET_DESC(8) ret=%d %02x %02x %02x %02x %02x %02x %02x %02x\n",
-				ret, first[0], first[1], first[2], first[3],
-				first[4], first[5], first[6], first[7]);
+				ret, xenolith_desc_dma[0], xenolith_desc_dma[1],
+				xenolith_desc_dma[2], xenolith_desc_dma[3],
+				xenolith_desc_dma[4], xenolith_desc_dma[5],
+				xenolith_desc_dma[6], xenolith_desc_dma[7]);
 			if (ret != 0) {
 				continue;
 			}
-			if (first[7] >= 8 && first[7] <= 64) {
-				dev->endp0.max_packet_size = first[7];
+			if (xenolith_desc_dma[7] >= 8 && xenolith_desc_dma[7] <= 64) {
+				dev->endp0.max_packet_size = xenolith_desc_dma[7];
+			}
+			for (n = 0; n < 64; n++) {
+				xenolith_desc_dma[n] = 0;
 			}
 			ret = usb_endp_control_wait(&dev->endp0,
 				USB_DIR_IN | USB_REQ_TYPE_STANDARD | USB_REQ_RECIP_DEVICE,
 				USB_REQ_GET_DESCRIPTOR,
 				USB_DESC_TYPE_DEV << 8,
-				0, sizeof(struct usb_desc_device), &dev->dev_desc, 1000);
-			log_error("GET_DESC(18) ret=%d mps=%u vid=%04x pid=%04x\n",
+				0, 64, xenolith_desc_dma, 1000);
+			log_error("GET_DESC(64) ret=%d mps=%u %02x %02x vid=%02x%02x pid=%02x%02x\n",
 				ret, dev->endp0.max_packet_size,
-				dev->dev_desc.id_vendor, dev->dev_desc.id_product);
+				xenolith_desc_dma[0], xenolith_desc_dma[1],
+				xenolith_desc_dma[9], xenolith_desc_dma[8],
+				xenolith_desc_dma[11], xenolith_desc_dma[10]);
 			if (ret == 0) {
+				for (n = 0; n < (int)sizeof(struct usb_desc_device)
+						&& n < 64; n++) {
+					((uint8_t *)&dev->dev_desc)[n] = xenolith_desc_dma[n];
+				}
 				break;
 			}
 		}
