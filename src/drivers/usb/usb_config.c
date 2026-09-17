@@ -302,7 +302,8 @@ int usb_set_configuration(struct usb_dev *dev, unsigned int n) {
 		log_error("failed");
 		return -1;
 	}
-	usleep(1000 * 1000);
+	/* XENOLITH_USB_ENUM_SLEEP: SET_CONFIG has no 1s recovery. */
+	usleep(10 * 1000);
 	log_debug("ok");
 	return 0;
 }
