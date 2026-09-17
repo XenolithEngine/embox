@@ -304,7 +304,8 @@ int usb_set_configuration(struct usb_dev *dev, unsigned int n) {
 		log_error("failed");
 		return -1;
 	}
-	usleep(1000 * 1000);
+	/* SET_CONFIGURATION has no recovery interval to speak of. */
+	usleep(10 * 1000);
 	log_debug("ok");
 	return 0;
 }
