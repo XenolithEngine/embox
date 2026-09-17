@@ -296,12 +296,25 @@ int usb_set_configuration(struct usb_dev *dev, unsigned int n) {
 
 	log_debug("dev(%d:%d) conf=%d", dev->bus_idx, dev->addr, n);
 
-	ret = usb_endp_control_wait(&dev->endp0,
-		USB_DIR_OUT | USB_REQ_TYPE_STANDARD | USB_REQ_RECIP_DEVICE,
-		USB_REQ_SET_CONFIG, n,
-		0, 0, NULL, 1000);
-	if (ret < 0) {
-		log_error("failed");
+	{
+		uint16_t val = n ? n : 1;
+		if (dev->usb_dev_configs[n].config_buf) {
+			struct usb_desc_configuration *c =
+				(struct usb_desc_configuration *)
+				dev->usb_dev_configs[n].config_buf;
+			if (c->b_configuration_value)
+				val = c->b_configuration_value;
+		}
+		/* wValue is the configuration's bConfigurationValue, usually 1,
+		 * not its zero-based index: SET_CONFIGURATION(0) deconfigures. */
+		log_debug("SET_CONFIG index=%u wValue=%u", n, val);
+		ret = usb_endp_control_wait(&dev->endp0,
+			USB_DIR_OUT | USB_REQ_TYPE_STANDARD | USB_REQ_RECIP_DEVICE,
+			USB_REQ_SET_CONFIG, val,
+			0, 0, NULL, 1000);
+	}
+	if (ret != 0) {
+		log_error("SET_CONFIG failed ret=%d\n", ret);
 		return -1;
 	}
 	/* SET_CONFIGURATION has no recovery interval to speak of. */

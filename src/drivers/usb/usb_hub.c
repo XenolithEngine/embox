@@ -138,6 +138,9 @@ struct usb_dev *usb_new_device(struct usb_dev *parent,
 		/* Return device even the driver was not found. */
 	}
 
+	log_debug("new_device port=%d addr=%d vid=%04x pid=%04x class=%d speed=%d",
+		port, dev->addr, dev->dev_desc.id_vendor, dev->dev_desc.id_product,
+		dev->dev_desc.b_dev_class, dev->speed);
 	log_info("port(%d) bus(%d) addr(%d)", port, dev->bus_idx, dev->addr);
 
 	return dev;
@@ -487,20 +490,22 @@ static int usb_hub_probe(struct usb_interface *iface) {
 	if (!is_root_hub(dev)) {
 		uint16_t status = 0, hubstatus = 0, hubchange = 0;
 
+		/* GET_STATUS takes wValue 0 (USB 2.0, 9.4.5). A STALL comes back
+		 * as a positive status, not a negative one. */
 		ret = usb_endp_control_wait(&dev->endp0,
 			USB_DIR_IN | USB_REQ_TYPE_STANDARD | USB_REQ_RECIP_DEVICE,
 			USB_REQ_GET_STATUS,
-			USB_DESC_TYPE_DEV << 8,
+			0,
 			0, 2, &status, 1000);
-		if (ret < 0) {
-			log_error("Cannot get device status!");
+		if (ret != 0) {
+			log_error("Cannot get device status ret=%d\n", ret);
 			return -1;
 		}
 		log_debug("  device status = 0x%04x", status);
 
 		ret = usb_hub_get_status(hub, &hubstatus, &hubchange);
-		if (ret < 0) {
-			log_error("Cannot get hub status!");
+		if (ret != 0) {
+			log_error("Cannot get hub status ret=%d\n", ret);
 			return -1;
 		}
 		log_debug("  hubstatus=0x%04x, hubchange=0x%04x", hubstatus, hubchange);
@@ -514,10 +519,12 @@ static int usb_hub_probe(struct usb_interface *iface) {
 	for (i = 0; i < hub->port_n; i++) {
 		uint16_t port_status, port_change;
 
-		if (usb_hub_port_get_status(hub, i, &port_status, &port_change) < 0) {
-			log_error("FAILED status");
+		if (usb_hub_port_get_status(hub, i, &port_status, &port_change) != 0) {
+			log_error("FAILED status port=%d\n", i);
 			return -1;
 		}
+		log_debug("hub port[%d] status=0x%04x change=0x%04x",
+			i, port_status, port_change);
 	}
 
 	dlist_head_init(&hub->lnk);
