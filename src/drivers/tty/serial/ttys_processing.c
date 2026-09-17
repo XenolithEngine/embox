@@ -58,10 +58,20 @@ static int uart_rx_action(struct lthread *self) {
 		int ch;
 
 		if (uart_state_test(uart, UART_STATE_RX_ACTIVE)) {
+			int got;
 			uart_state_clear(uart, UART_STATE_RX_ACTIVE);
-			while (ring_buff_dequeue(&uart->uart_rx_ring, &ch, 1)) {
-				tty_rx_locked(uart->tty, ch, 0);
-			}
+			/* Dequeue under irq_lock: the interrupt handler's enqueue
+			 * checks the ring's invariants on both ends, and must not see
+			 * the tail between its increment and ring_fixup_tail(). The
+			 * byte goes to the tty outside the lock. */
+			do {
+				irq_lock();
+				got = ring_buff_dequeue(&uart->uart_rx_ring, &ch, 1);
+				irq_unlock();
+				if (got) {
+					tty_rx_locked(uart->tty, ch, 0);
+				}
+			} while (got);
 			if (uart->uart_ops->uart_irq_en) {
 				uart->uart_ops->uart_irq_en(uart, &uart->params);
 			}
