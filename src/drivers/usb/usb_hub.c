@@ -252,18 +252,63 @@ static int usb_device_init(struct usb_hub *hub, struct usb_dev *dev) {
 	 * bytes (high-speed); a full/low-speed device may have 8 and will
 	 * NAK an oversized first read forever (USB 2.0 9.3.5: only 8 bytes
 	 * may be assumed). Read with 8, adopt bMaxPacketSize0 right after. */
+	/* XENOLITH_GETDESC_8: USB 2.0 9.2.6.3 - only 8 bytes of ep0 may be
+	 * assumed. Asking for 18 with MPS=8 DataOverran (CC=8) on the SEMICO
+	 * LS keyboard. Try LOW first: LSDA is 0 after EHCI companion handoff. */
 	dev->endp0.max_packet_size = 8;
 
-	ret = usb_endp_control_wait(&dev->endp0,
-		USB_DIR_IN | USB_REQ_TYPE_STANDARD | USB_REQ_RECIP_DEVICE,
-		USB_REQ_GET_DESCRIPTOR,
-		USB_DESC_TYPE_DEV << 8,
-		0, sizeof(struct usb_desc_device), &dev->dev_desc, 1000);
-	if (ret < 0) {
-		log_error("GET_DESC failed\n");
-		return ret;
+	{
+		uint8_t first[8];
+		int n;
+		enum usb_speed try_speed[2];
+		int t;
+
+		try_speed[0] = USB_SPEED_LOW;
+		try_speed[1] = USB_SPEED_FULL;
+		ret = -1;
+		for (t = 0; t < 2; t++) {
+			dev->speed = try_speed[t];
+			log_error("GET_DESC(8) try speed=%d (0=HS 1=FS 2=LS)\n",
+				dev->speed);
+			for (n = 0; n < 8; n++) {
+				first[n] = 0;
+			}
+			ret = usb_endp_control_wait(&dev->endp0,
+				USB_DIR_IN | USB_REQ_TYPE_STANDARD | USB_REQ_RECIP_DEVICE,
+				USB_REQ_GET_DESCRIPTOR,
+				USB_DESC_TYPE_DEV << 8,
+				0, 8, first, 1000);
+			log_error("GET_DESC(8) ret=%d %02x %02x %02x %02x %02x %02x %02x %02x\n",
+				ret, first[0], first[1], first[2], first[3],
+				first[4], first[5], first[6], first[7]);
+			if (ret != 0) {
+				continue;
+			}
+			if (first[7] >= 8 && first[7] <= 64) {
+				dev->endp0.max_packet_size = first[7];
+			}
+			ret = usb_endp_control_wait(&dev->endp0,
+				USB_DIR_IN | USB_REQ_TYPE_STANDARD | USB_REQ_RECIP_DEVICE,
+				USB_REQ_GET_DESCRIPTOR,
+				USB_DESC_TYPE_DEV << 8,
+				0, sizeof(struct usb_desc_device), &dev->dev_desc, 1000);
+			log_error("GET_DESC(18) ret=%d mps=%u vid=%04x pid=%04x\n",
+				ret, dev->endp0.max_packet_size,
+				dev->dev_desc.id_vendor, dev->dev_desc.id_product);
+			if (ret == 0) {
+				break;
+			}
+		}
 	}
-	dev->endp0.max_packet_size = dev->dev_desc.b_max_packet_size0;
+	if (ret != 0) {
+		log_error("GET_DESC failed\n");
+		return ret < 0 ? ret : -1;
+	}
+	if (dev->dev_desc.b_max_packet_size0 >= 8
+			&& dev->dev_desc.b_max_packet_size0 <= 64) {
+		dev->endp0.max_packet_size = dev->dev_desc.b_max_packet_size0;
+	}
+
 	log_info("Device %d:%d config:"
 			"\n\t\t len=%d type=%d bcd=0x%x class=%d subclass=%d vid=0x%04x pid=0x%04x",
 			dev->bus_idx, dev->addr,
@@ -281,9 +326,9 @@ static int usb_device_init(struct usb_hub *hub, struct usb_dev *dev) {
 		USB_DIR_OUT | USB_REQ_TYPE_STANDARD | USB_REQ_RECIP_DEVICE,
 		USB_REQ_SET_ADDRESS, addr,
 		0, 0, NULL, 1000);
-	if (ret < 0) {
-		log_error("SET_ADDR (addr=%d) failed\n", addr);
-		return ret;
+	if (ret != 0) {
+		log_error("SET_ADDR (addr=%d) failed ret=%d\n", addr, ret);
+		return ret < 0 ? ret : -1;
 	}
 	log_debug("SET_ADDR (addr=%d) OK", addr);
 	dev->addr = addr;
@@ -312,8 +357,8 @@ static int usb_hub_port_init(struct usb_hub *hub, struct usb_dev *dev,
 		uint16_t port_status = 0, port_change = 0;
 		if (usb_hub_port_get_status(hub, port,
 				&port_status, &port_change) == 0) {
-			dev->speed = (port_status & 0x0200)
-					? USB_SPEED_LOW : USB_SPEED_FULL;
+			/* XENOLITH_GETDESC_8: LSDA lies after companion handoff. */
+			dev->speed = USB_SPEED_LOW;
 		}
 	}
 
