@@ -413,6 +413,13 @@ static uint32_t ehci_roothub_portstatus(struct ehci_hcd *ehci, unsigned port) {
 	status = ehci_read(ehci, &ehci->ehci_regs->port_status[port]);
 	log_debug("port status = 0x%08x", status);
 
+	/* A full- or low-speed device released to the companion controller by
+	 * ehci_port_reset() belongs to the companion's root hub; here the port
+	 * is empty, since these queue heads are high-speed only. */
+	if (status & EHCI_PORT_OWNER) {
+		return 0;
+	}
+
 	/* set wChange bits */
 	if (status & EHCI_PORT_CSC) {
 		log_debug("USB_PORT_STAT_CONNECTION");
