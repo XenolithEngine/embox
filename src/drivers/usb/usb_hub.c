@@ -248,6 +248,12 @@ static int usb_device_init(struct usb_hub *hub, struct usb_dev *dev) {
 	int ret;
 	uint32_t addr;
 
+	/* XENOLITH_EP0_MAXPACKET: the default ep0 descriptor claims 64
+	 * bytes (high-speed); a full/low-speed device may have 8 and will
+	 * NAK an oversized first read forever (USB 2.0 9.3.5: only 8 bytes
+	 * may be assumed). Read with 8, adopt bMaxPacketSize0 right after. */
+	dev->endp0.max_packet_size = 8;
+
 	ret = usb_endp_control_wait(&dev->endp0,
 		USB_DIR_IN | USB_REQ_TYPE_STANDARD | USB_REQ_RECIP_DEVICE,
 		USB_REQ_GET_DESCRIPTOR,
@@ -257,6 +263,7 @@ static int usb_device_init(struct usb_hub *hub, struct usb_dev *dev) {
 		log_error("GET_DESC failed\n");
 		return ret;
 	}
+	dev->endp0.max_packet_size = dev->dev_desc.b_max_packet_size0;
 	log_info("Device %d:%d config:"
 			"\n\t\t len=%d type=%d bcd=0x%x class=%d subclass=%d vid=0x%04x pid=0x%04x",
 			dev->bus_idx, dev->addr,
@@ -297,6 +304,17 @@ static int usb_hub_port_init(struct usb_hub *hub, struct usb_dev *dev,
 	if (ret < 0) {
 		log_error("usb_hub_port_reset failed\n");
 		return ret;
+	}
+
+	/* XENOLITH_EP0_MAXPACKET: stamp the device speed from the port's
+	 * low-speed bit (bit 9); never assigned anywhere in stock embox. */
+	{
+		uint16_t port_status = 0, port_change = 0;
+		if (usb_hub_port_get_status(hub, port,
+				&port_status, &port_change) == 0) {
+			dev->speed = (port_status & 0x0200)
+					? USB_SPEED_LOW : USB_SPEED_FULL;
+		}
 	}
 
 	/* Now we are ready to enumerate this device */
