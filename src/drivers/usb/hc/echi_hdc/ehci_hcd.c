@@ -413,6 +413,16 @@ static uint32_t ehci_roothub_portstatus(struct ehci_hcd *ehci, unsigned port) {
 	status = ehci_read(ehci, &ehci->ehci_regs->port_status[port]);
 	log_debug("port status = 0x%08x", status);
 
+	/* XENOLITH_EHCI_COMPANION: a full/low-speed device was released to
+	 * the OHCI companion by ehci_port_reset(). This HCD cannot speak to
+	 * it (the queue heads are high-speed only); reporting the port as
+	 * connected sends the hub driver into an endless reset + GET_DESC
+	 * timeout loop. Report an empty port instead - the companion's own
+	 * root hub carries the device. */
+	if (status & EHCI_PORT_OWNER) {
+		return 0;
+	}
+
 	/* set wChange bits */
 	if (status & EHCI_PORT_CSC) {
 		log_debug("USB_PORT_STAT_CONNECTION");
