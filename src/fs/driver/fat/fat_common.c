@@ -2470,7 +2470,14 @@ int fat_destroy_inode(struct inode *inode) {
 	struct fat_file_info *fi;
 	struct dirinfo *di;
 
+	/* Under the driver lock: the VFS reaches this from its own reclaim, on
+	 * any core, and a locked read or write elsewhere may be in the middle of
+	 * using the very structure freed here. The test of the private pointer
+	 * is inside for the same reason. */
+	fat_lock();
+
 	if (!inode_priv(inode)) {
+		fat_unlock();
 		return 0;
 	}
 
@@ -2483,6 +2490,8 @@ int fat_destroy_inode(struct inode *inode) {
 	}
 
 	inode_priv_set(inode, NULL);
+
+	fat_unlock();
 
 	return 0;
 }
