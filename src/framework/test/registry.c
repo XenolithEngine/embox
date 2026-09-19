@@ -15,6 +15,8 @@
 #include <stddef.h>
 #include <string.h>
 
+#include <framework/mod/options.h>
+
 #include <framework/test/api.h>
 #include <lib/libds/array.h>
 
@@ -31,7 +33,8 @@ static int test_mod_enable(const struct mod *mod) {
 
 	test_mod = (struct test_mod *)mod;
 
-	if (!test_mod->suite.autorun) {
+	/* Off in an image that runs its suites itself. */
+	if (!OPTION_GET(BOOLEAN, autorun) || !test_mod->suite.autorun) {
 		return 0;
 	}
 

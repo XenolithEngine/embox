@@ -2,6 +2,10 @@ package embox.framework
 
 module test {
 	option string log_level="LOG_INFO"
+	/* Run each suite when its module is enabled at boot. A failing suite
+	 * aborts the runlevel; an image that runs the suites itself
+	 * (test_lookup + test_suite_run) turns this off. */
+	option boolean autorun=true
 
 	/*FIXME mybuild make flags options */
 	@DefineMacro("__FRAMEWORK__")
