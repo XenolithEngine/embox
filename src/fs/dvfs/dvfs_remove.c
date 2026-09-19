@@ -98,7 +98,8 @@ int dvfs_remove_locked(struct lookup *lu, int kind) {
 
 		res = i_no->i_ops->ino_remove(lu->parent->d_inode, i_no);
 		if (res != 0) {
-			log_error("Failed to remove inode");
+			/* ENOTEMPTY from the driver is an answer, not a fault */
+			log_debug("ino_remove: %d", res);
 			return res < 0 ? res : -EIO;
 		}
 	} else {
