@@ -4,6 +4,8 @@
  * @date Oct 27, 2019
  * @author Anton Bondarev
  */
+#include <string.h>
+
 #include <mem/misc/pool.h>
 
 #include <fs/fat.h>
@@ -17,6 +19,18 @@
 POOL_DEF(fat_fs_pool, struct fat_fs_info, FAT_DESC_QUANTITY);
 POOL_DEF(fat_file_pool, struct fat_file_info, FAT_INODE_QAUNTITY);
 POOL_DEF(fat_dirinfo_pool, struct dirinfo, FAT_INODE_QAUNTITY);
+
+/* All three hand their objects out zeroed. POOL_DEF puts the storage in
+ * .bss..reserve, which boot does not clear, and a freed object keeps what
+ * it held -- so an object that comes back from pool_alloc() holds whatever
+ * that RAM last did. Most callers used to memset it themselves, and the one
+ * that did not (fat_create_unlocked(), for mkdir) handed out a dirinfo whose
+ * `flags` were left over: on a Raspberry Pi 4 they had DFS_DI_BLANKENT set,
+ * fat_get_next() then took every empty entry for a free slot being searched
+ * for, and fat_dir_empty() grew the new directory one cluster at a time
+ * until the volume was full -- rmdir() of an empty directory answered
+ * ENOTEMPTY, or never answered. QEMU's RAM starts as zeroes, so it passed
+ * there. */
 
 /* How many of each are out on loan, and how many times a request was
  * refused. A pool that runs out surfaces as -ENOMEM from fat_create and
@@ -34,6 +48,7 @@ struct fat_fs_info *fat_fs_alloc(void) {
 	struct fat_fs_info *p = pool_alloc(&fat_fs_pool);
 
 	if (p) {
+		memset(p, 0, sizeof(*p));
 		fat_pool_use.fs_live++;
 	}
 	else {
@@ -53,6 +68,7 @@ struct fat_file_info *fat_file_alloc(void) {
 	struct fat_file_info *p = pool_alloc(&fat_file_pool);
 
 	if (p) {
+		memset(p, 0, sizeof(*p));
 		fat_pool_use.file_live++;
 		if (fat_pool_use.file_live > fat_pool_use.file_peak) {
 			fat_pool_use.file_peak = fat_pool_use.file_live;
@@ -75,6 +91,7 @@ struct dirinfo *fat_dirinfo_alloc(void) {
 	struct dirinfo *p = pool_alloc(&fat_dirinfo_pool);
 
 	if (p) {
+		memset(p, 0, sizeof(*p));
 		fat_pool_use.dirinfo_live++;
 		if (fat_pool_use.dirinfo_live > fat_pool_use.dirinfo_peak) {
 			fat_pool_use.dirinfo_peak = fat_pool_use.dirinfo_live;
