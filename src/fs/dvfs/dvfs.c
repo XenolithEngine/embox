@@ -552,6 +552,19 @@ static int dvfs_iterate_locked(struct lookup *lookup, struct dir_ctx *ctx) {
 
 	res = sb->sb_iops->ino_iterate(next_inode, next_dentry->name,
 	    lookup->parent->d_inode, ctx);
+	while (res == -ENOMEM && dvfs_fs_dentry_try_free(sb)) {
+		/* The driver's own pool is empty, and cached dentries of this volume
+		 * hold entries of it. Taken for the end of the directory, this cut
+		 * a listing short with names still to come. */
+		res = sb->sb_iops->ino_iterate(next_inode, next_dentry->name,
+		    lookup->parent->d_inode, ctx);
+	}
+	if (res == -ENOMEM) {
+		dvfs_destroy_dentry(next_dentry);
+		dvfs_destroy_inode(next_inode);
+		lookup->item = NULL;
+		return -ENOMEM;
+	}
 	if (res) {
 		/* iterate virtual */
 		dvfs_destroy_dentry(next_dentry);
