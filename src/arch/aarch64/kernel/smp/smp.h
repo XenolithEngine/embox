@@ -44,6 +44,14 @@ extern void smp_print_stopped(void);
 extern void aarch64_smp_stop_self(unsigned long pc, unsigned long lr,
     unsigned long sp, unsigned long psr);
 
+/**
+ * If this CPU is inside aarch64_irq_handler(), give what the interrupt
+ * interrupted and return 1; return 0 otherwise. Defined by the interrupt
+ * entry, which keeps a pointer to its frame for the handler's duration.
+ */
+extern int aarch64_irq_interrupted(unsigned long *pc, unsigned long *lr,
+    unsigned long *sp, unsigned long *psr);
+
 __END_DECLS
 
 #endif /* !__ASSEMBLER__ */

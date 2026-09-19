@@ -47,6 +47,16 @@ int bkl_trylock(void) {
 void bkl_wait(void) {
 	int spins = 64;
 
+#ifdef SMP
+	/* A core that aborts holding this lock stops the others with an IPI,
+	 * and a core waiting here from an interrupt handler has interrupts
+	 * masked and would never take it -- every core gets there within one
+	 * tick of its own timer. So the wait answers the stop itself. */
+	if (smp_stop_poll) {
+		smp_stop_poll(__builtin_return_address(0));
+	}
+#endif
+
 	/* Read-spin: the line stays shared, so a waiting core does not fight the
 	 * holder for it the way a compare-exchange loop does. Bounded, and with no
 	 * accounting of its own, so the caller's trylock keeps feeding the

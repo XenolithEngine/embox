@@ -17,6 +17,25 @@
 
 #ifdef SMP
 #include <aarch64/smp.h>
+#include <kernel/cpu/cpudata.h>
+
+/* The frame of the interrupt this CPU is handling, NULL outside of one.
+ * Handlers do not nest, so one slot per CPU. */
+static struct excpt_context *irq_frame __cpudata__;
+
+int aarch64_irq_interrupted(unsigned long *pc, unsigned long *lr,
+    unsigned long *sp, unsigned long *psr) {
+	struct excpt_context *ctx = cpudata_var(irq_frame);
+
+	if (ctx == NULL) {
+		return 0;
+	}
+	*pc = ctx->pc;
+	*lr = ctx->lr;
+	*sp = ctx->sp;
+	*psr = ctx->psr;
+	return 1;
+}
 #endif
 
 void aarch64_irq_handler(struct excpt_context *ctx) {
@@ -58,7 +77,15 @@ void aarch64_irq_handler(struct excpt_context *ctx) {
 		bkl_irq_zero++;
 	}
 
+#ifdef SMP
+	/* Only for the wait for the lock: that is where a stop can find this
+	 * core with interrupts masked, and bkl_wait() asks for this frame */
+	cpudata_var(irq_frame) = ctx;
+#endif
 	critical_enter(CRITICAL_IRQ_HANDLER);
+#ifdef SMP
+	cpudata_var(irq_frame) = NULL;
+#endif
 	{
 		/* Interrupts stay masked: a nested one would take a second exception
 		 * frame and could switch context with the outer one still live */
