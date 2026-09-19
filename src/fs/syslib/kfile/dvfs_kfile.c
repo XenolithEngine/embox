@@ -80,19 +80,16 @@ int kwrite(struct file_desc *desc, char *buf, int count) {
 		return -ENOSYS;
 	}
 
-	if (!(inode->i_mode & DVFS_NO_LSEEK)
-	    && (desc->f_pos + count > (off_t) inode->i_size)) {
-		if (!inode->i_ops || !inode->i_ops->ino_truncate) {
-			return -EFBIG;
-		}
-		if (inode->i_ops->ino_truncate(desc->f_inode, desc->f_pos + count)) {
-			return -EFBIG;
-		}
-	}
-
 	res = desc->f_ops->write(desc, buf, count);
 	if (res > 0) {
 		desc->f_pos += res;
+		/* The size goes up after the data is written, so a reader on another
+		 * core never sees a size covering unwritten clusters. Drivers that
+		 * keep the size themselves (FAT, ext2, ramfs) have done this already. */
+		if (!(inode->i_mode & DVFS_NO_LSEEK)
+		    && desc->f_pos > (off_t) inode->i_size) {
+			inode->i_size = desc->f_pos;
+		}
 	}
 
 	/* What the driver wrote, which may be short of COUNT. */
