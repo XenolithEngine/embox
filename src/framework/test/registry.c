@@ -15,6 +15,8 @@
 #include <stddef.h>
 #include <string.h>
 
+#include <framework/mod/options.h>
+
 #include <framework/test/api.h>
 #include <lib/libds/array.h>
 
@@ -31,7 +33,9 @@ static int test_mod_enable(const struct mod *mod) {
 
 	test_mod = (struct test_mod *)mod;
 
-	if (!test_mod->suite.autorun) {
+	/* An image that runs its suites itself -- and reports them somewhere a
+	 * boot that stopped at a failed runlevel could not -- turns this off. */
+	if (!OPTION_GET(BOOLEAN, autorun) || !test_mod->suite.autorun) {
 		return 0;
 	}
 
