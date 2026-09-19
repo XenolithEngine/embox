@@ -20,6 +20,7 @@
 #include <mem/sysmalloc.h>
 
 #include <hal/ipl.h>
+#include <kernel/critical.h>
 
 #include <mem/misc/pool.h>
 
@@ -88,6 +89,17 @@ struct sk_buff_data * skb_data_alloc(size_t size) {
 	ipl_t sp;
 	struct sk_buff_data_fixed *skb_data;
 	int alloc_type = -1;
+
+	/* Never the heap from an interrupt handler: the heap is guarded by
+	 * sched_lock(), which does not keep interrupts out, so an interrupt
+	 * landing inside sysmemalign() would reenter the allocator on the same
+	 * free lists. Refusing drops the frame, which TCP recovers from. */
+	if (skb_data_is_huge(size) && critical_inside(CRITICAL_IRQ_HANDLER)) {
+		log_error("skb of %zu bytes in an interrupt handler: larger than the "
+		          "pool's %zu, and the heap cannot be used here -- dropped",
+		    size, (size_t)skb_max_size());
+		return NULL;
+	}
 
 	sp = ipl_save();
 	{
