@@ -150,3 +150,55 @@ module fat_big {
 	depends embox.compat.posix.LibPosix
 	depends embox.framework.LibFramework
 }
+
+/* DVFS, the name tree under its lock (fs/dvfs/dvfs.h, LOCKING). These read
+ * DVFS's own counters, so unlike the suites above they need DVFS itself. */
+module dvfs_lookup {
+	source "dvfs_lookup.c"
+
+	@InitFS(target_dir="tmp_dl")
+	source "dvfs_lookup_mountpoint.txt"
+
+	depends embox.driver.ramdisk
+	depends embox.fs.driver.fat
+	depends embox.fs.dvfs.core
+	depends embox.fs.root_file_system
+	depends embox.compat.posix.LibPosix
+	depends embox.framework.LibFramework
+}
+
+module dvfs_smp {
+	source "dvfs_smp.c"
+
+	@InitFS(target_dir="tmp_ds")
+	source "dvfs_smp_mountpoint.txt"
+
+	depends embox.driver.ramdisk
+	depends embox.fs.driver.fat
+	depends embox.fs.dvfs.core
+	depends embox.fs.root_file_system
+	depends embox.compat.posix.LibPosix
+	depends embox.compat.posix.pthreads
+	depends embox.framework.LibFramework
+}
+
+module dvfs_hammer {
+	/* Seconds of work; each round is one second of all six workers. */
+	option number rounds = 10
+	/* Empty: a ramdisk of its own at /tmp_hammer. Otherwise a directory to
+	 * make and work in on a volume that is already mounted. */
+	option string dir = ""
+
+	source "dvfs_hammer.c"
+
+	@InitFS(target_dir="tmp_hammer")
+	source "dvfs_hammer_mountpoint.txt"
+
+	depends embox.driver.ramdisk
+	depends embox.fs.driver.fat
+	depends embox.fs.dvfs.core
+	depends embox.fs.root_file_system
+	depends embox.compat.posix.LibPosix
+	depends embox.compat.posix.pthreads
+	depends embox.framework.LibFramework
+}
