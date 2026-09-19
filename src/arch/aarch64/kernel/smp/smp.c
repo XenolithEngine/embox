@@ -183,11 +183,48 @@ struct aarch64_cpu_report {
 	unsigned long crit;
 	void *schedee;
 	int is_idle;
+	/* Set when the core stopped itself in bkl_wait() rather than on the IPI:
+	 * where it waited, and whether that was inside an interrupt handler, in
+	 * which case pc/lr/sp/psr are what the interrupt interrupted */
+	unsigned long waited_at;
+	int waited_in_irq;
 };
 
 static struct aarch64_cpu_report cpu_report[NCPU];
 static volatile int smp_stopping;
 static volatile int smp_printed;
+
+/**
+ * The other way a core stops: from bkl_wait(), for a core spinning on the
+ * Big Kernel Lock that the aborting core holds. From an interrupt handler it
+ * spins with interrupts masked and the stop IPI never reaches it; every core
+ * gets there within a tick of its own timer.
+ */
+void smp_stop_poll(void *where) {
+	struct aarch64_cpu_report *r;
+	unsigned long pc, lr, sp, psr;
+
+	if (!smp_stopping) {
+		return;
+	}
+	r = &cpu_report[cpu_get_id()];
+	if (r->state != 1) {
+		/* Not asked: the core doing the stopping, or not asked yet */
+		return;
+	}
+
+	r->waited_at = (unsigned long)where;
+	r->waited_in_irq = aarch64_irq_interrupted(&pc, &lr, &sp, &psr);
+	if (!r->waited_in_irq) {
+		/* Where the wait is is the whole of what is known: bkl_wait()'s
+		 * caller, inlined critical_enter() in whatever function it was */
+		pc = (unsigned long)where;
+		lr = 0;
+		__asm__ __volatile__("mov %0, sp" : "=r"(sp));
+		__asm__ __volatile__("mrs %0, daif" : "=r"(psr));
+	}
+	aarch64_smp_stop_self(pc, lr, sp, psr);
+}
 
 /**
  * Record where this core was and park it, interrupts masked. Reached from the
@@ -302,6 +339,12 @@ void smp_print_stopped(void) {
 		printk("        sp %#018lx  psr %#010lx  crit %#lx  schedee %p  %s\n",
 		    r->sp, r->psr, r->crit, r->schedee,
 		    r->is_idle ? "(idle)" : "(running)");
+		if (r->waited_at) {
+			printk("        was waiting for the BKL at %#lx%s\n", r->waited_at,
+			    r->waited_in_irq ? ", in an interrupt handler: pc/lr above "
+			                       "are what the interrupt interrupted"
+			                     : "");
+		}
 	}
 	printk("\n");
 }
