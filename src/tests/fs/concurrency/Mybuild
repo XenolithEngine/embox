@@ -13,8 +13,9 @@ module concurrency_test {
 	 * failing, and a failing suite aborts the runlevel, so the board never
 	 * reached a shell.
 	 *
-	 * rootfs_oldfs is what InitFsTest next door already depends on for the
-	 * same reason; pthreads is what two of the three cases are written in. */
-	depends embox.fs.rootfs_oldfs
+	 * The root file system is what InitFsTest next door already depends on
+	 * for the same reason; pthreads is what two of the three cases are
+	 * written in. */
+	depends embox.fs.root_file_system
 	depends embox.compat.posix.pthreads
 }
