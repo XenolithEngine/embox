@@ -15,6 +15,7 @@
 #include <fs/kfile.h>
 #include <fs/dvfs.h>
 
+#include <util/atomic_rmw.h>
 #include <util/math.h>
 
 /**
@@ -26,19 +27,22 @@
  * @retval -1 Descriptor fields are inconsistent
  */
 int kclose(struct file_desc *desc) {
-	if (!desc || !desc->f_inode || !desc->f_dentry)
+	if (!desc || !desc->f_dentry)
 		return -1;
 
 	if (!(desc->f_dentry->flags & VFS_DIR_VIRTUAL)) {
 		assert(desc->f_ops);
 	}
 
-	if (desc->f_ops && desc->f_ops->close) {
+	/* The driver is told only about a file it still has. */
+	if (desc->f_ops && desc->f_ops->close && desc->f_inode
+	    && 0 == dvfs_file_valid(desc)) {
 		desc->f_ops->close(desc);
 	}
 
-	if (!dentry_ref_dec(desc->f_dentry))
-		dvfs_destroy_dentry(desc->f_dentry);
+	/* The descriptor's reference. A cached dentry stays for reclaim; one
+	 * whose name was removed while this was open is freed here. */
+	dentry_ref_dec(desc->f_dentry);
 
 	dvfs_destroy_file(desc);
 	return 0;
@@ -51,13 +55,12 @@ int kclose(struct file_desc *desc) {
  * @param count Length of the data
  *
  * @return Bytes written or negative error code
- * @retval       0 Ok
  * @retval -ENOSYS Function is not implemented in file system driver
+ * @retval  -EBADF The file was removed while this was open
  */
 int kwrite(struct file_desc *desc, char *buf, int count) {
-	int res = 0; /* Assign to avoid compiler warning when use -O2 */
-	int retcode = count;
 	struct inode *inode;
+	int res;
 
 	if (!desc) {
 		return -EINVAL;
@@ -66,31 +69,32 @@ int kwrite(struct file_desc *desc, char *buf, int count) {
 	inode = desc->f_inode;
 	assert(inode);
 
+	if ((res = dvfs_file_valid(desc))) {
+		return res;
+	}
+
+	if (!desc->f_ops || !desc->f_ops->write) {
+		return -ENOSYS;
+	}
+
 	if (!(inode->i_mode & DVFS_NO_LSEEK)
-	    && ((inode->i_size - desc->f_pos) < count)) {
-		if (inode->i_ops && inode->i_ops->ino_truncate) {
-			res = inode->i_ops->ino_truncate(desc->f_inode, desc->f_pos + count);
-			if (res) {
-				retcode = -EFBIG;
-			}
+	    && (desc->f_pos + count > (off_t) inode->i_size)) {
+		if (!inode->i_ops || !inode->i_ops->ino_truncate) {
+			return -EFBIG;
 		}
-		else {
-			retcode = -EFBIG;
+		if (inode->i_ops->ino_truncate(desc->f_inode, desc->f_pos + count)) {
+			return -EFBIG;
 		}
 	}
 
-	if (desc->f_ops && desc->f_ops->write) {
-		res = desc->f_ops->write(desc, buf, count);
-	}
-	else {
-		retcode = -ENOSYS;
-	}
-
+	res = desc->f_ops->write(desc, buf, count);
 	if (res > 0) {
 		desc->f_pos += res;
 	}
 
-	return retcode;
+	/* What the driver wrote, not what was asked: a short or failed write
+	 * used to be reported as the whole count. */
+	return res;
 }
 
 /**
@@ -100,20 +104,38 @@ int kwrite(struct file_desc *desc, char *buf, int count) {
  * @param count Length of the data
  *
  * @return Bytes read or negative error code
- * @retval       0 Ok
  * @retval -ENOSYS Function is not implemented in file system driver
+ * @retval  -EBADF The file was removed while this was open
  */
 int kread(struct file_desc *desc, char *buf, int count) {
+	off_t size, pos;
 	int res;
-	int sz;
 
 	if (!desc) {
 		return -1;
 	}
 
-	sz = min(count, desc->f_inode->i_size - desc->f_pos);
+	if ((res = dvfs_file_valid(desc))) {
+		return res;
+	}
 
-	if (sz <= 0) {
+	/* One reading of the size, clamped against in signed arithmetic. With
+	 * f_pos past the end, the unsigned difference this used to take was a
+	 * huge number and the read went on past the end of the file; read twice,
+	 * a write on another core in between could make the clamp and the read
+	 * disagree. */
+	size = (off_t) atomic_rmw_load(&desc->f_inode->i_size, __ATOMIC_RELAXED);
+	pos = desc->f_pos;
+	if (!(desc->f_inode->i_mode & DVFS_NO_LSEEK)) {
+		if (pos >= size) {
+			return 0;
+		}
+		if ((off_t) count > size - pos) {
+			count = (int) (size - pos);
+		}
+	}
+
+	if (count <= 0) {
 		return 0;
 	}
 
@@ -133,17 +155,31 @@ int kread(struct file_desc *desc, char *buf, int count) {
 
 int kfstat(struct file_desc *desc, struct stat *sb) {
 	size_t block_size;
+	int res;
+
+	if ((res = dvfs_file_valid(desc))) {
+		return res;
+	}
+
+	if (desc->f_inode == NULL) {
+		/* A virtual directory made under another virtual one has no inode */
+		*sb = (struct stat){ .st_mode = S_IFDIR | S_IRWXA };
+		return 0;
+	}
 
 	*sb = (struct stat){
 	    .st_size = desc->f_inode->i_size,
 	    .st_mode = desc->f_inode->i_mode,
-	    .st_uid = 0,
-	    .st_gid = 0,
+	    .st_ino = desc->f_inode->i_no,
+	    .st_uid = desc->f_inode->i_owner_id,
+	    .st_gid = desc->f_inode->i_group_id,
+	    .st_mtime = desc->f_inode->i_mtime,
+	    .st_ctime = desc->f_inode->i_ctime,
 	};
 
 	sb->st_blocks = sb->st_size;
 
-	if (desc->f_inode->i_sb->bdev) {
+	if (desc->f_inode->i_sb && desc->f_inode->i_sb->bdev) {
 		block_size = block_dev_block_size(desc->f_inode->i_sb->bdev);
 		sb->st_blocks /= block_size;
 		sb->st_blocks += ((sb->st_blocks % block_size) != 0);
@@ -153,5 +189,13 @@ int kfstat(struct file_desc *desc, struct stat *sb) {
 }
 
 int kioctl(struct file_desc *fp, int request, void *data) {
+	int res;
+
+	if ((res = dvfs_file_valid(fp))) {
+		return res;
+	}
+	if (!fp->f_ops || !fp->f_ops->ioctl) {
+		return -ENOTTY;
+	}
 	return fp->f_ops->ioctl(fp, request, data);
 }

@@ -42,6 +42,8 @@ struct file_desc {
 	struct inode *f_inode;
 
 	off_t f_pos;
+	/* The generation of f_inode when this was opened; see dvfs_file_valid() */
+	unsigned int f_gen;
 
 	const struct file_operations *f_ops;
 };
@@ -55,6 +57,13 @@ extern void file_set_size(struct file_desc *file, size_t size);
 extern void *file_get_inode_data(struct file_desc *file);
 
 extern struct file_desc *file_desc_from_idesc(struct idesc *idesc);
+
+/* Whether DESC may still be used: 0 if so, -EBADF if its file was removed
+ * (the driver has let go of it) or its inode is not the one it opened. The
+ * two cases are counted apart, under the names oldfs gives them. */
+extern int dvfs_file_valid(struct file_desc *desc);
+extern unsigned long fdesc_dead_inode;
+extern unsigned long fdesc_stale_gen;
 
 extern struct file_desc *dvfs_alloc_file(void);
 extern int dvfs_destroy_file(struct file_desc *desc);
