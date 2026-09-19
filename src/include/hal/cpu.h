@@ -47,6 +47,14 @@ extern void smp_stop_others(void) __attribute__((weak));
 
 /** Print what the stopped CPUs reported. Prints once. Weak, as above. */
 extern void smp_print_stopped(void) __attribute__((weak));
+
+/**
+ * For a CPU that is spinning for the Big Kernel Lock, possibly with its
+ * interrupts masked, where the IPI smp_stop_others() sends cannot reach it:
+ * if a stop is under way and this CPU was asked, stop here as the IPI would
+ * have. @a where is the waiter's return address. Weak, as above.
+ */
+extern void smp_stop_poll(void *where) __attribute__((weak));
 #endif /* SMP */
 
 __END_DECLS
