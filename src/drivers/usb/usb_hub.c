@@ -69,6 +69,7 @@ struct usb_dev *usb_new_device(struct usb_dev *parent,
 
 	dev->hcd = hcd;
 	dev->parent = parent;
+	dev->port = port;
 
 	/* Fill control endpoint. */
 	if (usb_get_ep0(dev) < 0) {
@@ -254,7 +255,7 @@ static uint8_t xenolith_desc_dma[64] __attribute__((aligned(64)));
 
 static int usb_device_init(struct usb_hub *hub, struct usb_dev *dev) {
 	int ret;
-	uint32_t addr;
+	size_t addr;
 
 	/* XENOLITH_EP0_MAXPACKET: the default ep0 descriptor claims 64
 	 * bytes (high-speed); a full/low-speed device may have 8 and will

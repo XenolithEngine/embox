@@ -125,6 +125,9 @@ struct usb_dev_config {
 struct usb_dev {
 	unsigned short bus_idx;
 	unsigned short addr;
+	/* Port on the parent hub (root port for root-attached devices). The
+	 * xHCI slot context needs it to build the route string. */
+	unsigned int port;
 	struct dlist_head dev_link;
 	struct usb_dev *parent;
 

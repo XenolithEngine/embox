@@ -1,0 +1,24 @@
+package embox.driver.usb.hc
+
+/* xHCI host controller driver, ported from U-Boot 2026.07
+ * (drivers/usb/host/xhci{,-ring,-mem}.c). The port is literal, so this
+ * module is GPL-2.0+; the Embox USB core it plugs into stays BSD.
+ *
+ * xhci_uboot.h / xhci_compat.h carry the register/TRB definitions and the
+ * U-Boot compatibility layer; xhci_hcd.c is the Embox glue (usb_hcd_ops,
+ * single controller, polling request path mirroring U-Boot's). */
+module xhci_hcd {
+	option string log_level="LOG_ERR"
+	/* NOCACHE DMA arena for contexts, rings, DCBAA and scratchpad. */
+	option number dma_arena_size=131072
+
+	source "xhci.c"
+	source "xhci-ring.c"
+	source "xhci-mem.c"
+	source "xhci-dwc3.c"
+	source "xhci_hcd.c"
+
+	depends embox.driver.usb.core
+	depends embox.driver.usb.hub
+	depends embox.driver.periph_memory
+}
