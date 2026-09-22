@@ -80,6 +80,9 @@ static void uart_internal_init(struct uart *uart) {
 }
 
 int uart_open(struct uart *uart) {
+	const struct uart_ops *uops = uart->uart_ops;
+	int ret;
+
 	if (uart_state_test(uart, UART_STATE_OPEN)) {
 		return -EINVAL;
 	}
@@ -87,9 +90,32 @@ int uart_open(struct uart *uart) {
 
 	uart_internal_init(uart);
 
-	uart_setup(uart);
+	/* XENOLITH_UART_OPEN_ORDER: uart_setup() raises the hardware's RX
+	 * interrupt source (ns16550: IER.DR) and uart_attach_irq() makes the
+	 * line live at the interrupt controller. In that order a byte that
+	 * piled up in the RX FIFO while the line was dead (typed during boot,
+	 * adapter noise) asserts the irq in the middle of uart_open(), in
+	 * unit-init context, before the handler/lthread pair is fully
+	 * published -- the Radxa Zero 3E kiosk hung there, intermittently,
+	 * right after "runlevel is 3". Mask the source first, attach, drain
+	 * the stale FIFO, and only then let setup() raise the source: the
+	 * first irq now fires from a clean state after open has returned. */
+	if (uops->uart_irq_dis) {
+		uops->uart_irq_dis(uart, &uart->params);
+	}
 
-	return uart_attach_irq(uart);
+	ret = uart_attach_irq(uart);
+	if (ret) {
+		return ret;
+	}
+
+	if (uops->uart_hasrx) {
+		while (uops->uart_hasrx(uart)) {
+			uops->uart_getc(uart);
+		}
+	}
+
+	return uart_setup(uart);
 }
 
 int uart_close(struct uart *uart) {
