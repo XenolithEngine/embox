@@ -17,6 +17,8 @@
 
 #include <fs/bcache.h>
 
+#include <util/log.h>
+
 #include <embox/unit.h>
 EMBOX_UNIT_INIT(bcache_init);
 
@@ -62,6 +64,59 @@ struct buffer_head *bcache_getblk_locked(struct block_dev *bdev, int block, size
 
 	assert(0); /* UNREACHABLE */
 	return NULL;
+}
+
+/* Drop everything this device has in the cache, writing back what is dirty.
+ *
+ * The cache is keyed by the struct block_dev POINTER, and that pointer comes
+ * from a pool: destroy a device and the next one created is handed the same
+ * address. Without this, the new device inherits every cached block of the
+ * one before it -- reads answered from another volume's sectors, writes
+ * landing in buffers nobody will look at again. It took a test that creates
+ * a ramdisk, deletes it and creates another to show: mkfs wrote a boot
+ * sector, and reading sector 0 straight back gave the bytes the media held
+ * before the format.
+ *
+ * Dirty buffers are written out rather than dropped: the device is going
+ * away, but the media it stands for may not be (a card outlives the
+ * struct), and losing a write is worse than a slow delete. */
+void bcache_forget_dev(struct block_dev *bdev) {
+	struct buffer_head *bh = NULL;
+	struct hashtable_item *ht_item;
+
+	assert(bdev);
+
+	mutex_lock(&bcache_mutex);
+	dlist_foreach_entry(bh, &bh_list, bh_next) {
+		if (bh->bdev != bdev) {
+			continue;
+		}
+		/* A locked buffer is in somebody's hands right now. Unhooking it
+		 * would free memory that is being read from, so leave it: it is
+		 * still wrong, but it is a different wrong, and it is loud. */
+		if (buffer_locked(bh)) {
+			log_error("bcache: block %d of a device being destroyed is "
+			          "locked -- left in the cache",
+			    bh->block);
+			continue;
+		}
+
+		bcache_buffer_lock(bh);
+		{
+			if (buffer_dirty(bh) && bdev->driver && bdev->driver->bdo_write) {
+				bdev->driver->bdo_write(bdev, bh->data, bh->blocksize,
+				    bh->block);
+			}
+			dlist_del(&bh->bh_next);
+			ht_item = hashtable_del(bcache, bh);
+		}
+		bcache_buffer_unlock(bh);
+
+		sysfree(bh->data);
+		pool_free(&bcach_ht_item_pool, ht_item);
+		pool_free(&buffer_head_pool, bh);
+	}
+	mutex_unlock(&bcache_mutex);
 }
 
 static void free_more_memory(size_t size) {

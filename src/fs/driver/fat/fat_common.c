@@ -238,7 +238,9 @@ int fat_create_partition(void *dev, int fat_n) {
 	size_t num_sect = block_dev(bdev)->size / bytepersec;
 	assert(bdev->block_size <= FAT_MAX_SECTOR_SIZE);
 	uint32_t secperfat;
-	uint16_t rootentries = 0x0200;             /* 512 for FAT16 */
+	uint16_t rootentries = 0x0200;             /* 512 for FAT12/16 */
+	uint32_t clusters = 0;
+	int fat_type;
 	int reserved;
 	int err;
 	int i;
@@ -270,37 +272,88 @@ int fat_create_partition(void *dev, int fat_n) {
 
 	/* Size the FAT table for the volume. Previously hardcoded to 1 sector,
 	 * which caused writes beyond the table boundary for larger volumes.
-	 * Iteratively compute the correct size based on cluster count. */
+	 * Iteratively compute the correct size based on cluster count.
+	 *
+	 * The same loop decides WHICH FAT this volume is, and that is not the
+	 * caller's choice to make. Nothing on a FAT volume records its type:
+	 * every reader -- this driver, Linux, fsck -- counts the clusters and
+	 * applies the same two thresholds. So the boot sector must be written
+	 * in the shape that count implies, or its own fields send the reader to
+	 * the wrong sectors: a FAT12 volume carrying a FAT32 extended BPB says
+	 * "the root is cluster 2" to one half of a reader and "the root is a
+	 * 512-entry area after the FATs" to the other. That is what every
+	 * mkfs in this tree used to write, because fat_n defaulted to 32 and
+	 * rootentries was left at 512 regardless -- and no volume any board
+	 * here makes is large enough to actually be FAT32, so the FAT32 half
+	 * was always the wrong half.
+	 *
+	 * Two passes, because the answer feeds back into the question: a FAT32
+	 * volume has no root area, which frees 32 sectors, which moves the
+	 * cluster count. The second pass settles it. */
 	{
-		uint32_t root_sect = (rootentries * 32 + bytepersec - 1) / bytepersec;
 		uint32_t secperclus = lbr.bpb.secperclus;
 		uint32_t reserved_sect = 1;
 		uint32_t numfats = 2;
+		int pass;
 
-		secperfat = 1;
-		for (i = 0; i < 8; i++) {
-			uint32_t data, clusters, bytes, want;
+		for (pass = 0; pass < 2; pass++) {
+			uint32_t root_sect = (rootentries * 32 + bytepersec - 1)
+			                     / bytepersec;
 
-			data = num_sect - reserved_sect - root_sect - numfats * secperfat;
-			clusters = data / secperclus + 2;
+			secperfat = 1;
+			for (i = 0; i < 8; i++) {
+				uint32_t data, bytes, want;
 
-			if (clusters < 4085) {
-				bytes = (clusters * 3 + 1) / 2;  /* FAT12: 12 bits each */
-			}
-			else if (clusters < 65525) {
-				bytes = clusters * 2;
-			}
-			else {
-				bytes = clusters * 4;
+				data = num_sect - reserved_sect - root_sect
+				       - numfats * secperfat;
+				clusters = data / secperclus + 2;
+
+				if (clusters < 4085) {
+					bytes = (clusters * 3 + 1) / 2;  /* FAT12: 12 bits each */
+				}
+				else if (clusters < 65525) {
+					bytes = clusters * 2;
+				}
+				else {
+					bytes = clusters * 4;
+				}
+
+				want = (bytes + bytepersec - 1) / bytepersec;
+				if (want <= secperfat) {
+					break;
+				}
+				secperfat = want;
 			}
 
-			want = (bytes + bytepersec - 1) / bytepersec;
-			if (want <= secperfat) {
-				break;
+			/* A root area exists on FAT12/16 and must not on FAT32. If the
+			 * count says FAT32 while we sized a root area, drop it and take
+			 * the count again; otherwise we are done. */
+			if (clusters >= 65525 && rootentries != 0) {
+				rootentries = 0;
+				continue;
 			}
-			secperfat = want;
+			break;
 		}
+
+		fat_type = (clusters < 4085) ? 12 : (clusters < 65525) ? 16 : 32;
 	}
+
+	/* The caller may ask, but the volume answers. A 2 MiB ramdisk cannot be
+	 * FAT32 at any cluster size this formatter offers, and writing a FAT32
+	 * boot sector onto it does not make it one -- it only makes the boot
+	 * sector disagree with the volume. Said out loud rather than silently
+	 * overridden: a caller that asked for something impossible should hear
+	 * about it once, here, and not later as a directory of garbage. */
+	if (fat_n != 0 && fat_n != fat_type) {
+		log_warning("FAT%d was asked for, but %u clusters of %u sectors each "
+		            "make this volume FAT%d -- writing FAT%d",
+		    fat_n, (unsigned)clusters, (unsigned)lbr.bpb.secperclus,
+		    fat_type, fat_type);
+	}
+
+	/* rootentries may have been zeroed above, after the BPB was built. */
+	lbr.bpb.rootentries_l = (uint8_t)(0x00FF & rootentries);
+	lbr.bpb.rootentries_h = (uint8_t)(0x00FF & (rootentries >> 8));
 
 	if (0xFFFF > num_sect)	{
 		lbr.bpb.sectors_s_l = (uint8_t)(0x00000FF & num_sect);
@@ -312,7 +365,7 @@ int fat_create_partition(void *dev, int fat_n) {
 		lbr.bpb.sectors_l_3 = (uint8_t)(0x00000FF & (num_sect >> 24));
 	}
 
-	switch (fat_n) {
+	switch (fat_type) {
 	case 12:
 	case 16:
 		lbr.bpb.secperfat_l   = (uint8_t)(0x00FF & secperfat),
@@ -328,7 +381,7 @@ int fat_create_partition(void *dev, int fat_n) {
 
 		memcpy(lbr.ebpb.ebpb.label, LABEL, sizeof(lbr.ebpb.ebpb.label));
 		memcpy(lbr.ebpb.ebpb.system,
-		       fat_n == 12 ? SYSTEM12:SYSTEM16,
+		       fat_type == 12 ? SYSTEM12:SYSTEM16,
 		       sizeof(lbr.ebpb.ebpb.system));
 
 		memcpy(lbr.ebpb.ebpb.code, bootcode, sizeof(bootcode));
@@ -1397,19 +1450,37 @@ int fat_root_dir_record(void *bdev) {
 	/* Previously wrote a "ROOT DIR" entry at cluster rootdir/secperclus,
 	 * which is not a valid cluster. On remount, the walk would descend
 	 * into data clusters, reading file data as directory entries.
-	 * A FAT root directory holds no entry for itself. Clear it. */
+	 * A FAT root directory holds no entry for itself. Clear it.
+	 *
+	 * Where "it" is depends on the volume, and volinfo already knows: on
+	 * FAT12/16 rootdir is the first SECTOR of a fixed area of rootentries
+	 * entries; on FAT32 it is the CLUSTER number a chain starts at, and
+	 * rootentries is zero. Both have to be cleared -- a root directory that
+	 * is whatever the media last held is a directory of garbage entries --
+	 * and the FAT32 one has to be claimed in the FAT as well, or the
+	 * allocator hands the root's own cluster to the first file written. */
 	memset(fat_sector_buff, 0, sizeof(fat_sector_buff));
 
-	root_dir_sz = (fsi.vi.rootentries * sizeof(struct fat_dirent) +
-	               fsi.vi.bytepersec - 1) / fsi.vi.bytepersec;
+	if (fsi.vi.rootentries) {
+		root_dir_sz = (fsi.vi.rootentries * sizeof(struct fat_dirent) +
+		               fsi.vi.bytepersec - 1) / fsi.vi.bytepersec;
+	}
+	else {
+		root_dir_sz = fsi.vi.secperclus;
+	}
 
 	while (root_dir_sz) {
+		uint32_t sect;
+
 		root_dir_sz--;
+		sect = fsi.vi.rootentries
+		           ? fsi.vi.rootdir + root_dir_sz
+		           : fat_sec_by_clus(&fsi, fsi.vi.rootdir) + root_dir_sz;
+
 		if (0 > block_dev_write(bdev,
 		            (char *) fat_sector_buff,
 		            fsi.vi.bytepersec,
-		            (fsi.vi.rootdir + root_dir_sz) * fsi.vi.bytepersec
-		                / dev_blk_size)) {
+		            sect * fsi.vi.bytepersec / dev_blk_size)) {
 			return DFS_ERRMISC;
 		}
 	}
@@ -1421,6 +1492,10 @@ int fat_root_dir_record(void *bdev) {
 	cluster = fat_end_of_chain(&fsi);
 	fat_set_fat(&fsi, fat_sector_buff, 0, (cluster & ~0xffu) | 0xf8u);
 	fat_set_fat(&fsi, fat_sector_buff, 1, cluster);
+
+	if (!fsi.vi.rootentries) {
+		fat_set_fat(&fsi, fat_sector_buff, fsi.vi.rootdir, cluster);
+	}
 
 	return DFS_OK;
 }

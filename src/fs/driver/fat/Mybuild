@@ -3,7 +3,16 @@ package embox.fs.driver
 @DefaultImpl(fat_old)
 abstract module fat {
 	option string log_level="LOG_NONE"
-	option number default_fat_version = 32
+
+	/* Which FAT mkfs writes when the caller does not say. 0 means "the one
+	 * the volume is": the cluster count decides, which is what every reader
+	 * does anyway, so the boot sector and the volume agree. 12, 16 or 32 ask
+	 * for that type and get a warning when the geometry cannot be it -- and
+	 * it is written as the geometry says regardless, because a boot sector
+	 * that disagrees with its own volume sends readers to the wrong sectors.
+	 * Was 32, which on every volume small enough to be FAT12 or FAT16 -- all
+	 * of them here -- wrote a FAT32 extended BPB onto a FAT12 volume. */
+	option number default_fat_version = 0
 
 	option number inode_quantity=16
 	option number fat_descriptor_quantity=4

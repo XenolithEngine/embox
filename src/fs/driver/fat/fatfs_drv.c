@@ -57,9 +57,11 @@ int fat_format(struct block_dev *dev, void *priv) {
 		fat_n = DEFAULT_FAT_VERSION;
 	}
 
-	if (fat_n != 12 && fat_n != 16 && fat_n != 32) {
+	/* 0 is not "unset" any more, it is an answer: let the cluster count
+	 * decide, the way every reader of the volume will. */
+	if (fat_n != 0 && fat_n != 12 && fat_n != 16 && fat_n != 32) {
 		log_error("Unsupported FAT version: FAT%d "
-				"(FAT12/FAT16/FAT32 available)", fat_n);
+				"(FAT12/FAT16/FAT32 available, or 0 for what fits)", fat_n);
 		return -EINVAL;
 	}
 

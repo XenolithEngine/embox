@@ -96,6 +96,14 @@ struct ramdisk *ramdisk_create(char *path, size_t size) {
 		err = -idx;
 		goto err_free_mem;
 	}
+	/* The index this device took, kept so that deleting it gives back the
+	 * one it actually holds. It was never stored: ramdisk_delete() passed
+	 * ram->idx to index_free() and ram->idx was whatever the pool object
+	 * last held -- ramdisk_pool lives in .bss..reserve, which boot does not
+	 * clear. With one ramdisk at a time the stale value happened to be the
+	 * right one, so nothing ever showed; the first case that held two at
+	 * once freed index 0 twice and tripped ind_unset_bit's assertion. */
+	ramdisk->idx = idx;
 
 	ramdisk->bdev = block_dev_create(path, &ramdisk_pio_driver, ramdisk);
 	if (NULL == ramdisk->bdev) {
@@ -140,7 +148,16 @@ int ramdisk_delete(const char *name) {
 	index_free(&ramdisk_idx, ram->idx);
 	pool_free(&ramdisk_pool, ram);
 
-	block_dev_free(bdev);
+	/* destroy, not free: block_dev_free() releases the object and its slot
+	 * but leaves the device module -- the /dev node -- registered, still
+	 * naming memory that has just been handed back. Create a ramdisk of the
+	 * same name again and there are two: block_dev_find() answers with the
+	 * new one while the path /dev/<name> still resolves to the stale node,
+	 * so mkfs writes one volume and a reader of the other sees whatever was
+	 * on the media before. block_dev_destroy() is this function's proper
+	 * counterpart -- it deinits the module, takes any partitions with it,
+	 * and then frees. */
+	block_dev_destroy(bdev);
 
 	return 0;
 }
