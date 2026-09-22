@@ -28,4 +28,11 @@ static inline void bcache_buffer_unlock(struct buffer_head *bh) {
  */
 extern struct buffer_head *bcache_getblk_locked(struct block_dev *bdev, int block, size_t size);
 
+/**
+ * Drop every cached block belonging to @a bdev, writing back what is dirty.
+ * Called when a device is destroyed: the cache is keyed by the device
+ * pointer, which the next device created may get.
+ */
+extern void bcache_forget_dev(struct block_dev *bdev);
+
 #endif /* FS_BCACHE_H_ */
