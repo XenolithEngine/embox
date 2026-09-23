@@ -2001,6 +2001,109 @@ uint32_t fat_write_file(struct fat_file_info *fi, uint8_t *p_scratch,
 	return result;
 }
 
+/* ftruncate() on a FAT file. It only ever set the size in memory: growing
+ * allocated nothing, so the bytes past the old end were whatever the next
+ * write happened to leave; shrinking freed nothing and never reached the
+ * directory entry, so after a remount the file had its old length back.
+ *
+ * Growing writes zeros through fat_write_file(), which allocates the
+ * clusters and records the size and first cluster in the entry. Shrinking
+ * keeps the clusters the new length needs, marks the last of them as the end
+ * and frees the rest, and writes the entry itself -- first cluster 0 when
+ * nothing is left. A file whose name is gone (removed while open) has no
+ * entry to write; its clusters are still trimmed. */
+int fat_truncate_file(struct fat_file_info *fi, uint32_t length) {
+	static uint8_t zeros[512];
+	struct fat_fs_info *fsi = fi->fsi;
+	uint8_t *scratch = fat_sector_buff;
+	uint32_t clus_sz, keep, c, next, i;
+
+	fat_lock_assert("fat_truncate_file");
+
+	if (!fsi || !fi->volinfo || !fi->volinfo->secperclus
+	    || !fi->volinfo->bytepersec) {
+		return -EIO;
+	}
+	clus_sz = fi->volinfo->secperclus * fi->volinfo->bytepersec;
+
+	if (length > fi->filelen) {
+		size_t size = fi->filelen;
+
+		fi->mode |= O_RDWR;
+		if (fi->firstcluster >= 2
+		    && fat_seek_cluster(fi, scratch, fi->filelen) != DFS_OK) {
+			return -EIO;
+		}
+		fi->pointer = fi->filelen;
+		while (fi->pointer < length) {
+			uint32_t want = length - fi->pointer;
+			uint32_t done = 0;
+
+			if (want > sizeof(zeros)) {
+				want = sizeof(zeros);
+			}
+			if (fat_write_file(fi, scratch, zeros, &done, want, &size) != DFS_OK
+			    || done != want) {
+				fi->filelen = size;
+				return -ENOSPC;
+			}
+		}
+		fi->filelen = length;
+		return 0;
+	}
+
+	if (length == fi->filelen) {
+		return 0;
+	}
+
+	keep = (length + clus_sz - 1) / clus_sz;
+	if (fi->firstcluster >= 2) {
+		c = fi->firstcluster;
+		if (keep == 0) {
+			next = c;
+			fi->firstcluster = 0;
+		}
+		else {
+			for (i = 1; i < keep; i++) {
+				c = fat_get_fat(fsi, scratch, c);
+				if (c < 2 || fat_is_end_of_chain(fsi, c)) {
+					break;
+				}
+			}
+			next = (c >= 2 && !fat_is_end_of_chain(fsi, c))
+			           ? fat_get_fat(fsi, scratch, c) : fat_end_of_chain(fsi);
+			if (c >= 2 && !fat_is_end_of_chain(fsi, c)) {
+				fat_set_fat(fsi, scratch, c, fat_end_of_chain(fsi));
+			}
+		}
+		/* Free what is past the kept part, to the end of the chain. The same
+		 * `>= 2` guard as fat_free_chain(): 0 and 1 are not clusters. */
+		while (next >= 2 && !fat_is_end_of_chain(fsi, next)) {
+			c = next;
+			next = fat_get_fat(fsi, scratch, c);
+			fat_set_fat(fsi, scratch, c, 0);
+		}
+	}
+	fi->filelen = length;
+	fi->pointer = 0;
+	fi->cluster = fi->firstcluster;
+
+	if (fi->removed) {
+		return 0;
+	}
+	if (fat_read_sector(fsi, scratch, fi->dirsector)) {
+		return -EIO;
+	}
+	fat_direntry_set_clus(&((struct fat_dirent *)scratch)[fi->diroffset],
+	    fi->firstcluster);
+	fat_direntry_set_size(&((struct fat_dirent *)scratch)[fi->diroffset],
+	    length);
+	if (fat_write_sector(fsi, scratch, fi->dirsector)) {
+		return -EIO;
+	}
+	return 0;
+}
+
 static void fat_dir_clean_long(struct dirinfo *di, struct fat_file_info *fi) {
 	struct fat_dirent de = { };
 	struct dirinfo saved_di = { };
@@ -2820,6 +2923,7 @@ int fat_fill_inode(struct inode *inode, struct fat_dirent *de, struct dirinfo *d
 	fi->fdi          = di;
 
 	inode_size_set(inode, fi->filelen);
+	inode->i_no = fat_ino_of(fi);
 	if (de->attr & ATTR_READ_ONLY) {
 		inode->i_mode |= S_IRALL;
 	} else {
@@ -2827,6 +2931,22 @@ int fat_fill_inode(struct inode *inode, struct fat_dirent *de, struct dirinfo *d
 	}
 
 	return 0;
+}
+
+/* The volume has no inode numbers, so the file's is where its directory entry
+ * lies -- entries from the start of the volume -- as Linux's vfat numbers
+ * them. Stable while the name is; a rename moves it, and the caller renumbers.
+ * The root, which has no entry, is 1; no entry can be, the reserved sectors
+ * come first. Folded to 31 bits because i_no is an int: on a volume larger
+ * than 64 GiB two entries can share a number. */
+int fat_ino_of(const struct fat_file_info *fi) {
+	uint32_t per = fi->volinfo && fi->volinfo->bytepersec
+	                   ? fi->volinfo->bytepersec / sizeof(struct fat_dirent)
+	                   : 16;
+	uint64_t pos = (uint64_t)fi->dirsector * per + fi->diroffset;
+	int ino = (int)(pos & 0x7fffffff);
+
+	return ino > 1 ? ino : 2;
 }
 
 int fat_destroy_inode(struct inode *inode) {

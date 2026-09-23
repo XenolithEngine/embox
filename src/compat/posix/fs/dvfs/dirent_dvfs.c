@@ -10,6 +10,7 @@
 #include <posix_errno.h>
 #include <stddef.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include <dirent.h>
 #include <dirent_dvfs_impl.h>
@@ -21,8 +22,30 @@
 
 POOL_DEF(dir_pool, DIR, MAX_DIR_QUANTITY);
 
+/* The type of the entry, which the tree already knows: the inode's mode, or,
+ * for a virtual directory that has no inode, the dentry's own flags. It was
+ * never filled, so every reader that wanted it stat()ed the entry by name. */
+static unsigned char dirent_type(const struct dentry *dentry) {
+	mode_t mode = dentry->d_inode ? dentry->d_inode->i_mode : dentry->flags;
+
+	switch (mode & S_IFMT) {
+	case S_IFREG:  return DT_REG;
+	case S_IFDIR:  return DT_DIR;
+	case S_IFCHR:  return DT_CHR;
+	case S_IFBLK:  return DT_BLK;
+	case S_IFIFO:  return DT_FIFO;
+	case S_IFLNK:  return DT_LNK;
+	case S_IFSOCK: return DT_SOCK;
+	default:       return DT_UNKNOWN;
+	}
+}
+
 static inline void fill_dirent(struct dirent *dirent, struct dentry *dentry) {
-	dirent->d_ino = dentry->d_inode ? dentry->d_inode->i_no : 0;
+	/* i_no is -1 on a driver that has no numbers of its own; 0 then, which
+	 * is what "no number" reads as everywhere else. */
+	dirent->d_ino = (dentry->d_inode && dentry->d_inode->i_no > 0)
+	                    ? (ino_t)dentry->d_inode->i_no : 0;
+	dirent->d_type = dirent_type(dentry);
 	memcpy(dirent->d_name, dentry->name, NAME_MAX);
 }
 
@@ -99,6 +122,8 @@ struct dirent *readdir(DIR *dir) {
 	}
 
 	fill_dirent(&dir->dirent, l.item);
+	dir->pos++;
+	dir->dirent.d_off = dir->pos;
 
 	/* The entry stays in the tree as cache; reclaim takes it back when a
 	 * pool needs it. It used to be destroyed here, which freed a dentry
@@ -106,4 +131,40 @@ struct dirent *readdir(DIR *dir) {
 	dentry_ref_dec(l.item);
 
 	return &dir->dirent;
+}
+
+/* Back to the first entry. A driver keeps nothing in the iteration context
+ * but its position -- fs_ctx is an index or a pointer into data it already
+ * owns, fs_pos plain numbers -- so a zeroed context is a directory not yet
+ * read. This was a printk stub, and a reader that rewound read nothing. */
+void rewinddir(DIR *dir) {
+	if (!dir) {
+		return;
+	}
+	dir->ctx = (struct dir_ctx) {0};
+	dir->pos = 0;
+}
+
+/* The number of entries read so far: a position seekdir() can return to,
+ * which is all POSIX asks of it. */
+long telldir(DIR *dir) {
+	if (!dir) {
+		SET_ERRNO(EBADF);
+		return -1;
+	}
+	return dir->pos;
+}
+
+/* The iteration can only move forward, so going to a position is starting
+ * over and reading up to it. Directories here are short, and this is only
+ * paid by a caller that asked for it. */
+void seekdir(DIR *dir, long loc) {
+	if (!dir || loc < 0) {
+		return;
+	}
+	if (loc < dir->pos) {
+		rewinddir(dir);
+	}
+	while (dir->pos < loc && readdir(dir)) {
+	}
 }

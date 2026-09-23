@@ -33,6 +33,7 @@
  */
 
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -50,6 +51,7 @@
 #include <embox/test.h>
 #include <fs/fsop.h>
 #include <kernel/printk.h>
+#include <kernel/thread.h>
 #include <util/err.h>
 
 EMBOX_TEST_SUITE("FAT driver operations");
@@ -525,6 +527,27 @@ static int f32w_check(const char *path, unsigned seed) {
 	return bad;
 }
 
+/* The board's boot-log follower, in miniature: small appends to another file
+ * on the same volume while the download truncates and rewrites its own. */
+static volatile int f32w_log_stop;
+static volatile int f32w_log_writes;
+
+static void *f32w_logger(void *arg) {
+	int fd = open(F32W_DIR "/log.txt", O_WRONLY | O_CREAT | O_APPEND, 0666);
+
+	(void)arg;
+	while (fd >= 0 && !f32w_log_stop) {
+		if (write(fd, "a line of the boot log, as the follower writes it\n", 51)
+		    == 51) {
+			f32w_log_writes++;
+		}
+	}
+	if (fd >= 0) {
+		close(fd);
+	}
+	return NULL;
+}
+
 /* 1 if the first `n` sectors of the two FATs are the same, 0 if not. */
 static int f32w_fats_agree(const struct volume *v, unsigned n) {
 	struct block_dev *bdev = block_dev_find("ramdisk_f32w");
@@ -583,6 +606,43 @@ TEST_CASE("a FAT32 file grown a cluster at a time survives a remount, both FAT c
 		mounted = 0 == mount(F32W_DEV, F32W_DIR, FS_NAME, 0, NULL);
 	}
 
+	/* What the update's download does to its staging file: O_TRUNC over a
+	 * file that has a chain, then the new content in pieces the size of a
+	 * TCP segment. With the FAT sector held back, the chain is freed and a
+	 * new one allocated inside the same few operations. */
+	if (mounted) {
+		struct thread *logger;
+		int fd;
+
+		f32w_log_stop = 0;
+		f32w_log_writes = 0;
+		logger = thread_create(0, f32w_logger, NULL);
+		fd = open(F32W_DIR "/a.bin", O_WRONLY | O_TRUNC);
+
+		printk("fat_ops: FAT32 write-back: O_TRUNC over a chain: open %d\n", fd);
+		for (i = 0; i < F32W_CHUNKS && fd >= 0; i++) {
+			size_t off;
+
+			pattern_fill(pattern, DATA_SZ, 40);
+			for (off = 0; off < DATA_SZ; off += 1460) {
+				size_t n = DATA_SZ - off < 1460 ? DATA_SZ - off : 1460;
+
+				ok_write &= write(fd, pattern + off, n) == (ssize_t)n;
+			}
+		}
+		if (fd >= 0) {
+			close(fd);
+		}
+		f32w_log_stop = 1;
+		if (!ptr2err(logger)) {
+			thread_join(logger, NULL);
+		}
+		printk("fat_ops: FAT32 write-back: ... rewritten %s, %d log write(s) "
+		       "alongside\n", ok_write ? "whole" : "SHORT", f32w_log_writes);
+		umount(F32W_DIR);
+		mounted = 0 == mount(F32W_DEV, F32W_DIR, FS_NAME, 0, NULL);
+	}
+
 	bad_a = mounted ? f32w_check(F32W_DIR "/a.bin", 40) : -9;
 	bad_b = mounted ? f32w_check(F32W_DIR "/b.bin", 41) : -9;
 	memset(&v, 0, sizeof(v));
@@ -617,6 +677,198 @@ TEST_CASE("a FAT32 file grown a cluster at a time survives a remount, both FAT c
 	test_assert_equal(-1, bad_b);
 	test_assert_true(agree_before);
 	test_assert_true(agree_after);
+}
+
+/* ------------------------------------------------------------------ *
+ * What an EL0 program was missing (USR-11 in docs/EMBOX-REMAINING-WORK.md):
+ * the dispatcher worked around every one of these, and the workarounds were
+ * knowledge about the kernel's gaps. */
+
+TEST_CASE("readdir says what each entry is, and its number is stat's") {
+	struct stat st;
+	struct dirent *e;
+	DIR *d;
+	int file = 0, dir = 0, same_ino = 0;
+
+	test_assert_zero(write_file(FILE_A, 1024, 50));
+	mkdir(FS_DIR "/sub", 0777);
+	test_assert_zero(stat(FILE_A, &st));
+
+	test_assert_not_null(d = opendir(FS_DIR));
+	while ((e = readdir(d)) != NULL) {
+		if (0 == strcmp(e->d_name, "a.bin")) {
+			file = e->d_type == DT_REG;
+			same_ino = e->d_ino != 0 && e->d_ino == st.st_ino;
+		}
+		if (0 == strcmp(e->d_name, "sub")) {
+			dir = e->d_type == DT_DIR;
+		}
+	}
+	closedir(d);
+	rmdir(FS_DIR "/sub");
+	remove(FILE_A);
+
+	test_assert_true(file);
+	test_assert_true(dir);
+	test_assert_true(same_ino);
+}
+
+static int count_entries(DIR *d) {
+	int n = 0;
+
+	while (readdir(d)) {
+		n++;
+	}
+	return n;
+}
+
+TEST_CASE("rewinddir starts the directory over, and seekdir goes back to telldir") {
+	char second[NAME_MAX];
+	struct dirent *e;
+	DIR *d;
+	long at;
+	int first_pass, second_pass;
+
+	test_assert_zero(write_file(FILE_A, 100, 51));
+	test_assert_zero(write_file(FILE_B, 100, 52));
+
+	test_assert_not_null(d = opendir(FS_DIR));
+	first_pass = count_entries(d);
+	/* It was a printk: the second pass read nothing. */
+	rewinddir(d);
+	second_pass = count_entries(d);
+
+	rewinddir(d);
+	readdir(d);
+	at = telldir(d);
+	e = readdir(d);
+	strncpy(second, e ? e->d_name : "", sizeof(second) - 1);
+	second[sizeof(second) - 1] = '\0';
+	count_entries(d);
+	seekdir(d, at);
+	e = readdir(d);
+	closedir(d);
+
+	remove(FILE_A);
+	remove(FILE_B);
+
+	test_assert(first_pass >= 2);
+	test_assert_equal(first_pass, second_pass);
+	test_assert_equal(1, at);
+	test_assert_not_null(e);
+	test_assert_zero(strcmp(e->d_name, second));
+}
+
+TEST_CASE("stat fills what POSIX asks: dev, ino, nlink, blksize, blocks") {
+	struct stat a, b, root;
+
+	test_assert_zero(write_file(FILE_A, 1000, 53));
+	test_assert_zero(write_file(FILE_B, 1, 54));
+	test_assert_zero(stat(FILE_A, &a));
+	test_assert_zero(stat(FILE_B, &b));
+	test_assert_zero(stat("/", &root));
+	remove(FILE_A);
+	remove(FILE_B);
+
+	test_assert_equal(1, (int)a.st_nlink);
+	test_assert(a.st_blksize > 0);
+	test_assert_equal(2, (int)a.st_blocks);   /* 1000 bytes: two 512s */
+	test_assert_equal(a.st_mtime, a.st_atime);
+	test_assert(a.st_dev != 0);
+	test_assert_equal(a.st_dev, b.st_dev);    /* one volume */
+	test_assert(a.st_ino != 0 && b.st_ino != 0 && a.st_ino != b.st_ino);
+	test_assert(root.st_dev != a.st_dev);     /* another one */
+}
+
+TEST_CASE("getcwd names a working directory deeper than the environment holds") {
+	/* 8 + 4 * 16 characters: past the 59 that $PWD could carry. */
+	static const char *const parts[] = {
+	    "/abcdefghijklmno", "/pqrstuvwxyzabcd", "/efghijklmnopqrs",
+	    "/tuvwxyzabcdefgh"};
+	char path[PATH_MAX], got[PATH_MAX];
+	char *res;
+	size_t i;
+
+	strcpy(path, FS_DIR);
+	for (i = 0; i < sizeof(parts) / sizeof(parts[0]); i++) {
+		strcat(path, parts[i]);
+		mkdir(path, 0777);
+	}
+	test_assert(strlen(path) > 59);
+
+	test_assert_zero(chdir(path));
+	res = getcwd(got, sizeof(got));
+	chdir("/");
+
+	for (i = sizeof(parts) / sizeof(parts[0]); i > 0; i--) {
+		rmdir(path);
+		*strrchr(path, '/') = '\0';
+	}
+
+	test_assert_not_null(res);
+	test_assert_zero(strcmp(got, FS_DIR "/abcdefghijklmno/pqrstuvwxyzabcd"
+	                             "/efghijklmnopqrs/tuvwxyzabcdefgh"));
+}
+
+TEST_CASE("ftruncate grows a file with zeros and shrinks it, and a remount agrees") {
+	struct stat st;
+	int fd, i, zeros = 1, head = 1;
+	char c;
+
+	test_assert_zero(write_file(FILE_A, 3000, 55));
+
+	/* Grow, past several clusters: the new bytes read as zeros. */
+	fd = open(FILE_A, O_RDWR);
+	test_assert(fd >= 0);
+	test_assert_zero(ftruncate(fd, 20000));
+	close(fd);
+
+	test_assert_zero(umount(FS_DIR));
+	test_assert_zero(mount(FS_DEV, FS_DIR, FS_NAME, 0, NULL));
+
+	test_assert_zero(stat(FILE_A, &st));
+	test_assert_equal(20000, (int)st.st_size);
+	fd = open(FILE_A, O_RDONLY);
+	test_assert(fd >= 0);
+	pattern_fill(pattern, 3000, 55);
+	for (i = 0; i < 20000; i++) {
+		if (read(fd, &c, 1) != 1) {
+			zeros = head = 0;
+			break;
+		}
+		if (i < 3000 && c != pattern[i]) {
+			head = 0;
+		}
+		if (i >= 3000 && c != 0) {
+			zeros = 0;
+		}
+	}
+	close(fd);
+	test_assert_true(head);
+	test_assert_true(zeros);
+
+	/* Shrink: the length holds across a remount, the head is intact. */
+	fd = open(FILE_A, O_RDWR);
+	test_assert(fd >= 0);
+	test_assert_zero(ftruncate(fd, 100));
+	close(fd);
+
+	test_assert_zero(umount(FS_DIR));
+	test_assert_zero(mount(FS_DEV, FS_DIR, FS_NAME, 0, NULL));
+
+	test_assert_zero(stat(FILE_A, &st));
+	test_assert_equal(100, (int)st.st_size);
+	pattern_fill(pattern, 100, 55);
+	test_assert_equal(-1, check_file(FILE_A, 100, 100));
+
+	/* And to nothing, which frees the whole chain. */
+	fd = open(FILE_A, O_RDWR);
+	test_assert(fd >= 0);
+	test_assert_zero(ftruncate(fd, 0));
+	close(fd);
+	test_assert_zero(stat(FILE_A, &st));
+	test_assert_zero(st.st_size);
+	test_assert_zero(remove(FILE_A));
 }
 
 TEST_CASE("a read longer than one sector returns the whole thing") {

@@ -346,6 +346,12 @@ extern uint8_t fat_sector_buff[FAT_MAX_SECTOR_SIZE];
 /* The FAT sector write-back: see fat_common.c. Flush writes the held sector
  * to both copies; drop flushes and forgets it. Both are called with the
  * driver lock held, and fat_unlock() drops when the outermost hold ends. */
+/* An inode number for a file: where its directory entry is. See fat_common.c. */
+extern int fat_ino_of(const struct fat_file_info *fi);
+
+/* ftruncate(): grow with zeros or free the tail, and the entry follows. */
+extern int fat_truncate_file(struct fat_file_info *fi, uint32_t length);
+
 extern int fat_fatc_flush(void);
 extern int fat_fatc_drop(void);
 

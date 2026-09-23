@@ -44,6 +44,12 @@ struct super_block {
 	 * then closes it onto a superblock that no longer exists. The seal makes
 	 * the count mean something for longer than the instant it was taken. */
 	int                     sb_unmounting;
+
+	/* A number for this mount, different from every other volume mounted in
+	 * this boot: what stat() reports as st_dev, so that (st_dev, st_ino)
+	 * names one file. Not a device number -- volumes in memory have no
+	 * device -- and not a pointer, which st_dev would hand to anyone. */
+	unsigned int            sb_dev;
 };
 
 extern struct super_block *super_block_alloc(const char *fs_driver, const char *source);
