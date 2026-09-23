@@ -178,6 +178,22 @@ static int fat_delete_unlocked(struct inode *dir, struct inode *node) {
 		return -ENOTEMPTY;
 	}
 
+	if (!S_ISDIR(node->i_mode)) {
+		/* A file loses its name now and its clusters on the last
+		 * reference, which is fat_destroy_inode(): POSIX's "the data lives
+		 * until the last close". This used to free the chain here, so a
+		 * descriptor still open on the file answered EBADF. The private
+		 * data stays on the inode -- that is what tells DVFS the data is
+		 * still there (dvfs_file_valid). A board that loses power in
+		 * between leaves the chain allocated and nameless, which fsck
+		 * reclaims, as it does for any system that works this way. */
+		if (fat_unlink_entry(fi, (uint8_t *) fat_sector_buff)) {
+			return -1;
+		}
+		fi->removed = 1;
+		return 0;
+	}
+
 	if (fat_unlike_file(fi, (uint8_t *) fat_sector_buff)) {
 		return -1;
 	}

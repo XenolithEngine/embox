@@ -18,9 +18,15 @@ unsigned long fdesc_stale_gen;
 /* A descriptor pins its dentry, and the dentry its inode, so the inode under
  * an open descriptor is never freed and never handed to another file. The
  * generation says so out loud: if it ever differs, the pin was lost somewhere
- * and the descriptor would be about to answer with another file's data. The
- * dying check is the ordinary case -- the name was removed while this was
- * open, and the driver freed the file's data with it. */
+ * and the descriptor would be about to answer with another file's data.
+ *
+ * A dying inode -- its name removed while this was open -- is answered as
+ * long as the driver still has its data, which it says by keeping its private
+ * data on the inode: FAT keeps a file's clusters until the last reference
+ * (fat_destroy_inode), which is POSIX's "the file lives until the last
+ * close". A driver that freed the data with the name clears the pointer, and
+ * the descriptor is refused rather than answered from whatever the storage
+ * became next. */
 int dvfs_file_valid(struct file_desc *desc) {
 	struct inode *inode = desc->f_inode;
 
@@ -31,7 +37,7 @@ int dvfs_file_valid(struct file_desc *desc) {
 		atomic_rmw_add_fetch(&fdesc_stale_gen, 1, __ATOMIC_RELAXED);
 		return -EBADF;
 	}
-	if (inode->i_dying) {
+	if (inode->i_dying && inode_priv(inode) == NULL) {
 		atomic_rmw_add_fetch(&fdesc_dead_inode, 1, __ATOMIC_RELAXED);
 		return -EBADF;
 	}
