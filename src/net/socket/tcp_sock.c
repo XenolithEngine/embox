@@ -120,7 +120,12 @@ int send_rst_from_socket(struct tcp_sock *tcp_sk){
     tcp_sk->rem.seq++;
     tcp_set_ack_field(tcph, tcp_sk->rem.seq);
     send_seq_from_sock(tcp_sk, skb);
+    /* Nothing acknowledges a RST, so skb_free() unlinks it from tx_queue at
+     * once, under the queue's lock: the retransmit timer walks that list
+     * from another context. */
+    tcp_sock_lock(tcp_sk, TCP_SYNC_WRITE_QUEUE);
     skb_free(skb);
+    tcp_sock_unlock(tcp_sk, TCP_SYNC_WRITE_QUEUE);
 
     return 0;
 }
