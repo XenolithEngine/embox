@@ -10,6 +10,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <stdint.h>
+#include <time.h>
 
 #include <fs/hlpr_path.h>
 #include <fs/fat.h>
@@ -76,18 +78,58 @@ void fat_get_filename(char *tmppath, char *filename) {
 	return;
 }
 #endif
+/* Days since 1970-01-01 to a civil date (Howard Hinnant's days_from_civil,
+ * inverted), without struct tm and so without the libc time module. */
+static void fat_civil_from_days(int64_t z, int *y, unsigned *m, unsigned *d) {
+	int64_t era, yoe, doy, mp;
+
+	z += 719468;
+	era = (z >= 0 ? z : z - 146096) / 146097;
+	doy = z - era * 146097;                                   /* doe first */
+	yoe = (doy - doy / 1460 + doy / 36524 - doy / 146096) / 365;
+	*y = (int)(yoe + era * 400);
+	doy = doy - (365 * yoe + yoe / 4 - yoe / 100);
+	mp = (5 * doy + 2) / 153;
+	*d = (unsigned)(doy - (153 * mp + 2) / 5 + 1);
+	*m = (unsigned)(mp < 10 ? mp + 3 : mp - 9);
+	*y += (*m <= 2);
+}
+
+/* Stamps DE with the wall clock, or with 1980-01-01 00:00 -- the FAT epoch,
+ * the earliest date the format can say -- when the clock is not set, which
+ * without an RTC it never is: it counts from 1970 at boot. This used to write
+ * a constant meant as "01:01, Jan 1, 2006" whose month field was 0, so every
+ * host tool showed 2006-00-17. */
 void fat_set_filetime(struct fat_dirent *de) {
-	/* TODO set normal time */
-		de->crttime_l = 0x20;	/* 01:01:00am, Jan 1, 2006. */
-		de->crttime_h = 0x08;
-		de->crtdate_l = 0x11;
-		de->crtdate_h = 0x34;
-		de->lstaccdate_l = 0x11;
-		de->lstaccdate_h = 0x34;
-		de->wrttime_l = 0x20;
-		de->wrttime_h = 0x08;
-		de->wrtdate_l = 0x11;
-		de->wrtdate_h = 0x34;
+	struct timespec ts;
+	uint16_t date = (1 << 5) | 1;
+	uint16_t time = 0;
+
+	if (clock_gettime(CLOCK_REALTIME, &ts) == 0) {
+		int64_t secs = ts.tv_sec;
+		int64_t days = secs / 86400;
+		int64_t rem = secs % 86400;
+		unsigned m, d;
+		int y;
+
+		fat_civil_from_days(days, &y, &m, &d);
+		if (y >= 1980 && y <= 2107) {
+			date = (uint16_t)(((y - 1980) << 9) | (m << 5) | d);
+			time = (uint16_t)(((rem / 3600) << 11) | (((rem / 60) % 60) << 5)
+			                  | ((rem % 60) / 2));
+		}
+	}
+
+	de->crttime_l = time & 0xff;
+	de->crttime_h = time >> 8;
+	de->crtdate_l = date & 0xff;
+	de->crtdate_h = date >> 8;
+	de->lstaccdate_l = date & 0xff;
+	de->lstaccdate_h = date >> 8;
+	de->wrttime_l = time & 0xff;
+	de->wrttime_h = time >> 8;
+	de->wrtdate_l = date & 0xff;
+	de->wrtdate_h = date >> 8;
 }
 
 /*
