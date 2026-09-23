@@ -19,6 +19,16 @@
  * There is no return path here. EL0 comes back only through an exception, and
  * aarch64_sync_handler decides what that means.
  *
+ * Interrupts are masked before ELR_EL1 and SPSR_EL1 are written, and stay
+ * masked until the eret, which takes PSTATE from SPSR_EL1 and so unmasks them
+ * in EL0. Taking an exception overwrites both registers, and returning from
+ * one leaves ELR_EL1 holding the address it returned to. An IRQ between the
+ * msr to ELR_EL1 and the eret -- the thread was preemptible here -- therefore
+ * sent EL0 to the kernel instruction after the msr: an EL0 instruction abort,
+ * permission fault level 3, at usermode_entry + 0xc or usermode_entry_clone +
+ * 0x10. That was USR-5, seen twice in months and caught the third time by a
+ * hunt of three hundred fstest runs.
+ *
  * usermode_entry_clone is the same entry for a thread created by clone(220):
  * the difference is that its stack, its TLS pointer and its return address come
  * from the caller instead of being a fresh program's. x0 is zero either way,
@@ -36,6 +46,7 @@
  *   struct ue_data { void *ip; void *sp; }  -- kernel/usermode.h
  */
 usermode_entry:
+	msr	daifset, #0xf		/* until the eret: see the file comment */
 	ldr	x1, [x0, #0]		/* data->ip */
 	ldr	x2, [x0, #8]		/* data->sp */
 
@@ -92,6 +103,7 @@ usermode_entry:
  * x0 == 0.
  */
 usermode_entry_clone:
+	msr	daifset, #0xf		/* until the eret: see the file comment */
 	ldr	x1, [x0, #0]		/* data->ip  */
 	ldr	x2, [x0, #8]		/* data->sp  */
 	ldr	x3, [x0, #16]		/* data->tls */
