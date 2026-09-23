@@ -97,6 +97,11 @@ void fat_lock(void) {
 }
 
 void fat_unlock(void) {
+	if (fat_lock_depth == 1) {
+		/* The operation is over: the table on the card is whole again
+		 * before anyone else can look at it. */
+		fat_fatc_drop();
+	}
 	if (--fat_lock_depth == 0) {
 		fat_lock_owner = NULL;
 	}
@@ -136,36 +141,158 @@ static uint32_t fat_write_de(struct dirinfo *di, struct fat_dirent *de);
 static int fat_get_free_entries(struct dirinfo *dir, int n);
 static int fat_dirent_by_file(struct fat_file_info *fi, struct fat_dirent *de);
 static uint32_t fat_dir_extend(struct dirinfo *di);
-int fat_read_sector(struct fat_fs_info *fsi, uint8_t *buffer, uint32_t sector) {
-	size_t ret;
-	int blk;
+/* ------------------------------------------------- FAT sector write-back
+ *
+ * Growing a file by a cluster links the old last cluster to the new one and
+ * marks the new one as the end: two fat_set_fat() calls, each writing its FAT
+ * sector and then the mirror. Four single-block writes per cluster, and on an
+ * SD card every one of them waits for the card to program -- a board
+ * measurement (drivers/sd_measure, boot 107) wrote a new 4 MiB file at half
+ * the speed of rewriting the same file in place, in every bus mode, and the
+ * difference was those writes and the runs of data they broke up.
+ *
+ * So the last FAT sector written is held here instead, and goes to the card
+ * -- both copies -- when a different FAT sector is written, or when the
+ * driver lock is let go for the last time (fat_unlock). Nothing outside one
+ * locked operation ever sees a held sector: when write() returns the table
+ * on the card is exactly what the old code would have left, and a power cut
+ * inside the call loses what it lost before. What changes is only how many
+ * times a sector is written on the way.
+ *
+ * Reads of a held sector, or of its mirror, are answered from here; that is
+ * what keeps fat_get_fat() and the free-cluster scan honest in between.
+ *
+ * FAT16 and FAT32 only. A FAT12 entry can straddle two sectors, and
+ * fat_set_fat() writes those one after the other; that path stays as it was.
+ */
+static struct {
+	struct fat_fs_info *fsi;   /* NULL: nothing held */
+	uint32_t sector;           /* in the first FAT */
+	int dirty;
+	uint8_t buf[FAT_MAX_SECTOR_SIZE] __attribute__((aligned(16)));
+} fat_fatc;
+
+static int fat_raw_read(struct fat_fs_info *fsi, uint8_t *buffer,
+    uint32_t sector) {
 	int blkpersec = fsi->vi.bytepersec / fsi->bdev->block_size;
+	size_t ret;
 
 	log_debug("sector(%d), fsi: bytepersec(%d), bdev->block_size(%d)",
 			sector, fsi->vi.bytepersec, fsi->bdev->block_size);
-	blk = sector * blkpersec;
+	ret = block_dev_read(fsi->bdev, (char*) buffer, fsi->vi.bytepersec,
+	    sector * blkpersec);
+	return ret != fsi->vi.bytepersec ? DFS_ERRMISC : DFS_OK;
+}
 
-	ret = block_dev_read(fsi->bdev, (char*) buffer, fsi->vi.bytepersec, blk);
-	if (ret != fsi->vi.bytepersec)
-		return DFS_ERRMISC;
-	else
+static int fat_raw_write(struct fat_fs_info *fsi, uint8_t *buffer,
+    uint32_t sector) {
+	int blkpersec = fsi->vi.bytepersec / fsi->bdev->block_size;
+	size_t ret;
+
+	log_debug("sector(%d), fsi: bytepersec(%d), bdev->block_size(%d)",
+			sector, fsi->vi.bytepersec, fsi->bdev->block_size);
+	ret = block_dev_write(fsi->bdev, (char*) buffer, fsi->vi.bytepersec,
+	    sector * blkpersec);
+	return ret != fsi->vi.bytepersec ? DFS_ERRMISC : DFS_OK;
+}
+
+/* 1 = in the first FAT, 2 = in the second, 0 = not a FAT sector we hold. */
+static int fat_fatc_which(struct fat_fs_info *fsi, uint32_t sector) {
+	const struct volinfo *vi = &fsi->vi;
+
+	/* Only inside a locked operation: that is what guarantees the flush
+	 * in fat_unlock(). A path that got here without the lock writes
+	 * through, as everything did before. */
+	if (fat_lock_depth == 0 || fat_lock_owner != thread_self()) {
+		return 0;
+	}
+	if (!fsi->fatc_ok || vi->secperfat == 0
+	    || (vi->filesystem != FAT16 && vi->filesystem != FAT32)
+	    || vi->bytepersec > FAT_MAX_SECTOR_SIZE) {
+		return 0;
+	}
+	if (sector >= vi->fat1 && sector < vi->fat1 + vi->secperfat) {
+		return 1;
+	}
+	if (sector >= vi->fat1 + vi->secperfat
+	    && sector < vi->fat1 + 2 * vi->secperfat) {
+		return 2;
+	}
+	return 0;
+}
+
+int fat_fatc_flush(void) {
+	struct fat_fs_info *fsi = fat_fatc.fsi;
+	int res;
+
+	if (!fsi || !fat_fatc.dirty) {
 		return DFS_OK;
+	}
+	res = fat_raw_write(fsi, fat_fatc.buf, fat_fatc.sector);
+	if (res == DFS_OK) {
+		res = fat_raw_write(fsi, fat_fatc.buf,
+		    fat_fatc.sector + fsi->vi.secperfat);
+	}
+	if (res != DFS_OK) {
+		log_error("FAT sector %u could not be written back",
+		    (unsigned)fat_fatc.sector);
+	}
+	/* Clean either way: a sector that cannot be written is not made more
+	 * writable by trying it again at every unlock. */
+	fat_fatc.dirty = 0;
+	return res;
+}
+
+int fat_fatc_drop(void) {
+	int res = fat_fatc_flush();
+
+	fat_fatc.fsi = NULL;
+	return res;
+}
+
+int fat_read_sector(struct fat_fs_info *fsi, uint8_t *buffer, uint32_t sector) {
+	if (fat_fatc.fsi == fsi && fat_fatc_which(fsi, sector)
+	    && (sector == fat_fatc.sector
+	        || sector == fat_fatc.sector + fsi->vi.secperfat)) {
+		memcpy(buffer, fat_fatc.buf, fsi->vi.bytepersec);
+		return DFS_OK;
+	}
+	return fat_raw_read(fsi, buffer, sector);
 }
 
 int fat_write_sector(struct fat_fs_info *fsi, uint8_t *buffer, uint32_t sector) {
-	size_t ret;
-	int blk;
-	int blkpersec = fsi->vi.bytepersec / fsi->bdev->block_size;
+	const int which = fat_fatc_which(fsi, sector);
+	const int held = fat_fatc.fsi == fsi;
 
-	log_debug("sector(%d), fsi: bytepersec(%d), bdev->block_size(%d)",
-			sector, fsi->vi.bytepersec, fsi->bdev->block_size);
-
-	blk = sector * blkpersec;
-	ret = block_dev_write(fsi->bdev, (char*) buffer, fsi->vi.bytepersec, blk);
-	if (ret != fsi->vi.bytepersec)
-		return DFS_ERRMISC;
-	else
+	if (which == 1) {
+		if (fat_fatc.fsi && (!held || fat_fatc.sector != sector)) {
+			if (fat_fatc_flush() != DFS_OK) {
+				return DFS_ERRMISC;
+			}
+		}
+		if (buffer != fat_fatc.buf) {
+			memcpy(fat_fatc.buf, buffer, fsi->vi.bytepersec);
+		}
+		fat_fatc.fsi = fsi;
+		fat_fatc.sector = sector;
+		fat_fatc.dirty = 1;
 		return DFS_OK;
+	}
+	if (which == 2 && held
+	    && sector == fat_fatc.sector + fsi->vi.secperfat
+	    && memcmp(buffer, fat_fatc.buf, fsi->vi.bytepersec) == 0) {
+		/* The mirror of the held sector, with the held bytes: the flush
+		 * writes exactly this. */
+		return DFS_OK;
+	}
+	if (which == 2 && held) {
+		/* The second FAT, written on its own terms: the held sector goes
+		 * first, so the two copies are never written out of order. */
+		if (fat_fatc_flush() != DFS_OK) {
+			return DFS_ERRMISC;
+		}
+	}
+	return fat_raw_write(fsi, buffer, sector);
 }
 
 uint32_t fat_current_dirsector(struct dirinfo *di) {
@@ -1396,6 +1523,9 @@ int fat_root_dir_record(void *bdev) {
 
 	assert(dev_blk_size > 0);
 
+	/* Zeroed, so fatc_ok is 0: this volume lives on the stack and its FAT
+	 * writes go straight to the card. */
+	memset(&fsi, 0, sizeof(fsi));
 	fsi.bdev = bdev;
 
 	/* Obtain pointer to first partition on first (only) unit */

@@ -165,6 +165,12 @@ static size_t fat_write(struct file_desc *desc, void *buf, size_t size) {
 		return 0;
 	}
 	res = fat_write_unlocked(desc, buf, size);
+	/* The clusters this call took are only on the card once the held FAT
+	 * sector is. Flushed here, not left to fat_unlock(), so a failure is
+	 * the caller's to see. */
+	if (fat_fatc_flush() != DFS_OK) {
+		res = 0;
+	}
 	fat_unlock();
 	return res;
 }
