@@ -764,9 +764,16 @@ static uint32_t fat_set_fat(struct fat_fs_info *fsi, uint8_t *p_scratch,
 			if (DFS_OK == result) {
 				result = fat_read_sector(fsi, p_scratch, ++sector);
 				if (DFS_OK == result) {
-					/* Odd cluster: High 12 bits being set*/
+					/* Odd cluster: High 12 bits being set. The shift was
+					 * missing: 0xff00 of the entry stored into a byte is 0,
+					 * so every odd cluster whose entry straddles two FAT
+					 * sectors (341, 1023, 1706... with 512-byte sectors)
+					 * had its top eight bits cleared -- an end-of-chain
+					 * mark 0xfff read back as 0x00f, and the file's chain
+					 * ran on into cluster 15 and round again. A FAT12
+					 * volume never filled past cluster 341 never showed. */
 					if (cluster & 1) {
-						p_scratch[0] = new_contents & 0xff00;
+						p_scratch[0] = (new_contents & 0xff00) >> 8;
 					}
 					/* Even cluster: Low 12 bits being set */
 					else {
