@@ -321,9 +321,18 @@ static int rich_prompt(const char *fmt, char *buf, size_t len) {
 		case '$':
 			ret = snprintf(buf, len, "%c", uid ? '$' : '#');
 			break;
-		case 'w':
-			ret = snprintf(buf, len, "%s", getenv("PWD"));
+		case 'w': {
+			/* The working directory itself, which DVFS keeps; PWD only
+			 * where that cannot be had. A telnet session has no PWD. */
+			char cwd[128];
+			const char *wd = getcwd(cwd, sizeof(cwd));
+
+			if (wd == NULL) {
+				wd = getenv("PWD");
+			}
+			ret = snprintf(buf, len, "%s", wd != NULL ? wd : "/");
 			break;
+		}
 		}
 
 		if (ret < 0) {
