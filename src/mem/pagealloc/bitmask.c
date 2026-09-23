@@ -19,8 +19,15 @@
 #include <util/math.h>
 
 #include <mem/page.h>
+#include <hal/ipl.h>
+#include <kernel/spinlock.h>
 
-//TODO page : have no synchronization
+/* One lock for every page allocator, as pool.c has one for every pool: the
+ * allocators are laid down by PAGE_ALLOCATOR_DEF() and page_allocator_init()
+ * in several places, and a lock of their own would change that layout.
+ * Interrupts are masked for the length of a search, which can be long, so
+ * callers take memory in runs and keep it. */
+static spinlock_t page_lock = SPIN_STATIC_UNLOCKED;
 
 static inline int page_ptr2i(struct page_allocator *allocator, void *page) {
 	return (page - allocator->pages_start) / allocator->page_size;
@@ -113,9 +120,18 @@ static void *search_multi_page(struct page_allocator *allocator, size_t page_q) 
 }
 
 void *page_alloc(struct page_allocator *allocator, size_t page_q) {
+	void *page;
+	ipl_t ipl;
+
 	assert(allocator);
 
-	return search_multi_page(allocator, page_q);
+	ipl = ipl_save();
+	__spin_lock(&page_lock);
+	page = search_multi_page(allocator, page_q);
+	__spin_unlock(&page_lock);
+	ipl_restore(ipl);
+
+	return page;
 }
 
 void *page_alloc_zero(struct page_allocator *allocator, size_t page_q) {
@@ -129,7 +145,13 @@ void *page_alloc_zero(struct page_allocator *allocator, size_t page_q) {
 }
 
 void page_free(struct page_allocator *allocator, void *page, size_t page_q) {
+	ipl_t ipl;
+
+	ipl = ipl_save();
+	__spin_lock(&page_lock);
 	mark_n_free(allocator, page_ptr2i(allocator, page), page_q);
+	__spin_unlock(&page_lock);
+	ipl_restore(ipl);
 }
 
 struct page_allocator *page_allocator_init(char *start, size_t len, size_t page_size) {
@@ -191,6 +213,7 @@ size_t page_reserve(struct page_allocator *allocator, void *start,
 	uintptr_t from = (uintptr_t)start;
 	uintptr_t to = from + len;
 	size_t page_i, last, taken = 0;
+	ipl_t ipl;
 
 	if (to <= from || to <= base || from >= end) {
 		return 0;
@@ -204,6 +227,8 @@ size_t page_reserve(struct page_allocator *allocator, void *start,
 
 	/* Every page the range touches, partly or wholly */
 	last = (to - base + allocator->page_size - 1) / allocator->page_size;
+	ipl = ipl_save();
+	__spin_lock(&page_lock);
 	for (page_i = (from - base) / allocator->page_size; page_i < last;
 	    page_i++) {
 		if (!bitmap_test_bit(allocator->bitmap, page_i)) {
@@ -212,6 +237,8 @@ size_t page_reserve(struct page_allocator *allocator, void *start,
 		}
 	}
 	allocator->free -= taken * allocator->page_size;
+	__spin_unlock(&page_lock);
+	ipl_restore(ipl);
 
 	return taken;
 }
