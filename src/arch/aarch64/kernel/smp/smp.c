@@ -54,6 +54,19 @@
 /* 0 on a board whose cores are started with PSCI */
 #define SPINTABLE_BASE OPTION_GET(NUMBER, spintable_base)
 
+/* 0 when Aff0 numbers the cores, 8 when Aff1 does (DynamIQ) */
+#define MPIDR_CPU_SHIFT OPTION_GET(NUMBER, mpidr_cpu_shift)
+
+#if (MPIDR_CPU_SHIFT != 0) && (MPIDR_CPU_SHIFT != 8) \
+    && (MPIDR_CPU_SHIFT != 16)
+#error "mpidr_cpu_shift names an affinity field: 0, 8 or 16"
+#endif
+
+#if (SPINTABLE_BASE != 0) && (MPIDR_CPU_SHIFT != 0)
+/* aarch64_ap_entry_mpidr in reset_handler.S takes the logical id from Aff0 */
+#error "a spin-table board numbers its cores in Aff0: mpidr_cpu_shift = 0"
+#endif
+
 EMBOX_UNIT_INIT(aarch64_smp_init);
 
 /**
@@ -421,11 +434,17 @@ void aarch64_startup_ap(unsigned int cpu_id) {
 }
 
 /**
- * The assumed MPIDR of a core that is not running yet: Aff0 = @a cpu_id in
- * the primary's cluster. A multi-cluster board would have to read its tree.
+ * The assumed MPIDR of a core that is not running yet: the primary's, with
+ * the field that numbers cores (mpidr_cpu_shift) set to @a cpu_id. With the
+ * field fixed at Aff0 this asked a DynamIQ SoC for cores that are not there:
+ * an RK3588's cpu1 is 0x100, and 0x001 is thread 1 of cpu0. Cores numbered
+ * across clusters in some other way would have to be read from the tree.
  */
 static uint64_t ap_mpidr(unsigned int cpu_id) {
-	return (aarch64_cpu_mpidr(0) & ~0xffULL) | cpu_id;
+	const uint64_t field = 0xffULL << MPIDR_CPU_SHIFT;
+
+	return (aarch64_cpu_mpidr(0) & ~field)
+	       | ((uint64_t)cpu_id << MPIDR_CPU_SHIFT);
 }
 
 /**

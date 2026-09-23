@@ -23,6 +23,12 @@ module smp extends embox.arch.smp {
 	 * (0xd8 on a Raspberry Pi and on QEMU's raspi). 0 = PSCI instead. */
 	option number spintable_base = 0
 
+	/* Which affinity field numbers the cores: 0 = Aff0, as on QEMU virt and
+	 * the Cortex-A72 of a Pi 4; 8 = Aff1, as on every DynamIQ core (Cortex-A55,
+	 * A76: RK3566, RK3588), whose Aff0 is the thread and always 0. Used for
+	 * the MPIDR a PSCI CPU_ON names. */
+	option number mpidr_cpu_shift = 0
+
 	source "smp.c"
 	source "psci.c"
 
