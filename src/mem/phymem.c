@@ -14,6 +14,11 @@
 #include <util/binalign.h>
 #include <util/log.h>
 
+#include <framework/mod/options.h>
+
+#define PHYMEM_RESERVE_BASE ((uintptr_t)OPTION_GET(NUMBER, reserve_base))
+#define PHYMEM_RESERVE_SIZE ((size_t)OPTION_GET(NUMBER, reserve_size))
+
 EMBOX_UNIT_INIT(phymem_init);
 
 struct page_allocator *__phymem_allocator;
@@ -44,6 +49,16 @@ static int phymem_init(void) {
 		__phymem_allocator = page_allocator_init(phymem_alloc_start, mem_len,
 		    PAGE_SIZE());
 	}
+
+	if (__phymem_allocator && (PHYMEM_RESERVE_SIZE != 0)) {
+		size_t taken = page_reserve(__phymem_allocator,
+		    (void *)(uintptr_t)PHYMEM_RESERVE_BASE, PHYMEM_RESERVE_SIZE);
+
+		log_info("reserved %#lx..%#lx: %zu page(s) held back",
+		    (unsigned long)PHYMEM_RESERVE_BASE,
+		    (unsigned long)(PHYMEM_RESERVE_BASE + PHYMEM_RESERVE_SIZE), taken);
+	}
+
 	return phymem_alloc_start == va ? 0 : -EIO;
 }
 
