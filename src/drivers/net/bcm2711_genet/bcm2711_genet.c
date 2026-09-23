@@ -80,6 +80,7 @@ static struct {
 	uint32_t rx_dropped;
 	uint32_t rx_errors;
 	uint32_t rx_frag;
+	uint32_t rx_resync;  /* times the rx indices were found out of step */
 	uint32_t rx_by_irq;
 	uint32_t rx_by_poll;
 	uint32_t irq_count;
@@ -651,12 +652,43 @@ static void genet_rx_descs_init(uintptr_t base) {
 	}
 }
 
+static int genet_rx_drain_ring(int from_irq);
+
+/* Who is draining the ring: 0 nobody, 1 somebody. See genet_rx_drain(). */
+static int genet_rx_busy;
+
 /* Take everything the ring holds and hand it to the stack. Returns how many
- * frames were delivered, so the poller can tell busy from idle. */
+ * frames were delivered, so the poller can tell busy from idle.
+ *
+ * One drainer at a time: the interrupt handler and the backstop thread both
+ * call this, and two drainers would both advance the consumer index past the
+ * producer. A try-flag rather than a lock: the thread would hold a lock with
+ * interrupts open, and the interrupt on its own core would spin on it for
+ * ever. A caller that finds the ring busy leaves; the drainer re-reads the
+ * producer index before it stops, so nothing waits past the next interrupt
+ * or poll. */
 static int genet_rx_drain(int from_irq) {
+	int delivered;
+	int round;
+
+	if (__atomic_exchange_n(&genet_rx_busy, 1, __ATOMIC_ACQUIRE)) {
+		return 0;
+	}
+	delivered = 0;
+	do {
+		round = genet_rx_drain_ring(from_irq);
+		delivered += round;
+	} while (round > 0);
+	__atomic_store_n(&genet_rx_busy, 0, __ATOMIC_RELEASE);
+
+	return delivered;
+}
+
+static int genet_rx_drain_ring(int from_irq) {
 	uintptr_t base = genet_state.base;
 	struct net_device *dev = genet_netdev;
 	uint32_t prod;
+	uint32_t pending;
 	int delivered = 0;
 
 	if (!dev) {
@@ -664,6 +696,22 @@ static int genet_rx_drain(int from_irq) {
 	}
 
 	prod = genet_rd(base, GENET_RDMA_PROD_INDEX) & 0xffff;
+
+	/* The ring holds GENET_TOTAL_DESCS descriptors, so the producer can be at
+	 * most that far ahead. Anything else is the indices out of step, and the
+	 * loop would walk the whole index space to get back: catch up instead,
+	 * and say so. */
+	pending = (prod - genet_rx_cons) & 0xffff;
+	if (pending > GENET_TOTAL_DESCS) {
+		log_error("rx ring out of step: prod %u cons %u; resynchronised",
+		    prod, genet_rx_cons);
+		genet_state.rx_resync++;
+		genet_rx_cons = prod;
+		/* The index is the consumer modulo the ring, which divides 65536. */
+		genet_rx_index = genet_rx_cons % GENET_TOTAL_DESCS;
+		genet_wr(base, GENET_RDMA_CONS_INDEX, genet_rx_cons);
+		return 0;
+	}
 
 	while (genet_rx_cons != prod) {
 		uint32_t desc = GENET_RX_OFF + genet_rx_index * GENET_DMA_DESC_SIZE;
