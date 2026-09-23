@@ -133,7 +133,7 @@ void page_free(struct page_allocator *allocator, void *page, size_t page_q) {
 }
 
 struct page_allocator *page_allocator_init(char *start, size_t len, size_t page_size) {
-	char *pages_start;
+	char *pages_start, *end;
 	struct page_allocator *allocator;
 	unsigned int pages;
 	size_t bitmap_len;
@@ -142,9 +142,21 @@ struct page_allocator *page_allocator_init(char *start, size_t len, size_t page_
 		return NULL;
 	}
 
+	end = start + len;
 	start = (char *) binalign_bound((uintptr_t) start, 16);
-	pages = len / page_size;
 	pages_start = (char *) binalign_bound((uintptr_t) start, page_size);
+	/* Counted from where the pages start, not from START: counted from
+	 * START, a region that did not begin on a page boundary got its last
+	 * page past its end whenever the gap before the first page was big
+	 * enough for the header -- the loop below, the only thing that took a
+	 * page back, then never ran. */
+	if (pages_start >= end) {
+		return NULL;
+	}
+	pages = (end - pages_start) / page_size;
+	if (pages == 0) {
+		return NULL;
+	}
 
 	bitmap_len = sizeof(unsigned long) * BITMAP_SIZE(pages + 1); /* one for guardbit */
 
@@ -173,6 +185,38 @@ struct page_allocator *page_allocator_init(char *start, size_t len, size_t page_
 	bitmap_set_bit(allocator->bitmap, pages);
 
 	return allocator;
+}
+
+size_t page_reserve(struct page_allocator *allocator, void *start,
+    size_t len) {
+	uintptr_t base = (uintptr_t)allocator->pages_start;
+	uintptr_t end = base + (uintptr_t)allocator->pages_n * allocator->page_size;
+	uintptr_t from = (uintptr_t)start;
+	uintptr_t to = from + len;
+	size_t page_i, last, taken = 0;
+
+	if (to <= from || to <= base || from >= end) {
+		return 0;
+	}
+	if (from < base) {
+		from = base;
+	}
+	if (to > end) {
+		to = end;
+	}
+
+	/* Every page the range touches, partly or wholly */
+	last = (to - base + allocator->page_size - 1) / allocator->page_size;
+	for (page_i = (from - base) / allocator->page_size; page_i < last;
+	    page_i++) {
+		if (!bitmap_test_bit(allocator->bitmap, page_i)) {
+			bitmap_set_bit(allocator->bitmap, page_i);
+			taken++;
+		}
+	}
+	allocator->free -= taken * allocator->page_size;
+
+	return taken;
 }
 
 int page_belong(struct page_allocator *allocator, void *page) {

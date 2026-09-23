@@ -20,6 +20,11 @@ static inline int page_belong(struct page_allocator *allocator, void *page) {
 	return 0;
 }
 
+static inline size_t page_reserve(struct page_allocator *allocator,
+    void *start, size_t len) {
+	return 0;
+}
+
 static inline void *page_alloc(struct page_allocator *allocator, size_t page_q) {
 	return NULL;
 }

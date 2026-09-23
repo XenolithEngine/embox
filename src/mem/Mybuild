@@ -3,6 +3,12 @@ package embox.mem
 module phymem {
 	option string log_level="LOG_INFO" /*log_info */
 
+	/* A range inside the RAM region that is not the kernel's to hand out --
+	 * on a Raspberry Pi 4 the VideoCore's gpu_mem, which the firmware puts
+	 * just under 1 GiB whatever the board's RAM size is. 0 bytes = none. */
+	option number reserve_base = 0
+	option number reserve_size = 0
+
 	source "phymem.c"
 	depends embox.mem.vmem_device_memory
 	depends embox.mem.sections

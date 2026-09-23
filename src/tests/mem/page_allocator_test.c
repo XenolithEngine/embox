@@ -79,3 +79,42 @@ TEST_CASE("a request larger than the pool is refused") {
 	test_assert_not_null(p);
 	page_free(allocator, p, 1);
 }
+
+/* page_reserve() takes a range out for good: nothing inside it is handed out
+ * afterwards, everything outside it still is, and the free count says so.
+ * What it is for is a firmware carve-out inside the RAM region -- on a
+ * Raspberry Pi 4 the VideoCore's memory, framebuffer included, which the
+ * allocator used to hand out as free pages. */
+TEST_CASE("a reserved range is never handed out, and the rest still is") {
+	static char buff[0x4000];
+	struct page_allocator *allocator;
+	char *first, *lo, *hi, *p;
+	size_t n, got = 0, before;
+
+	allocator = page_allocator_init(buff, sizeof(buff), 0x100);
+	test_assert_not_null(allocator);
+	n = allocator->pages_n;
+	test_assert(n > 8);
+	/* The pool is inside the memory it was given */
+	test_assert((char *)allocator->pages_start + n * 0x100
+	    <= buff + sizeof(buff));
+
+	first = allocator->pages_start;
+	/* Pages 2..4, given by a range that starts and ends mid-page */
+	lo = first + 2 * 0x100 + 0x10;
+	hi = first + 4 * 0x100 + 0x80;
+	before = allocator->free;
+	test_assert_equal(3, page_reserve(allocator, lo, hi - lo));
+	test_assert_equal(before - 3 * 0x100, allocator->free);
+
+	/* Again: nothing more to take */
+	test_assert_zero(page_reserve(allocator, lo, hi - lo));
+	/* Outside the allocator: nothing either */
+	test_assert_zero(page_reserve(allocator, buff + sizeof(buff), 0x1000));
+
+	while (NULL != (p = page_alloc(allocator, 1))) {
+		test_assert(p < first + 2 * 0x100 || p >= first + 5 * 0x100);
+		got++;
+	}
+	test_assert_equal(n - 3, got);
+}

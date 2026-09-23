@@ -38,6 +38,13 @@ extern void page_free(struct page_allocator *allocator, void *page, size_t page_
 
 extern int page_belong(struct page_allocator *allocator, void *page);
 
+/* Takes the pages [START, START + LEN) out of the allocator for good: memory
+ * the allocator was given that is not its to hand out, such as a firmware
+ * carve-out inside the RAM region. The part outside the allocator's range is
+ * ignored. Returns the number of pages taken. */
+extern size_t page_reserve(struct page_allocator *allocator, void *start,
+    size_t len);
+
 #define PAGE_ALLOCATOR_DEF(name, space, page_number, page_size) \
 	static unsigned long ctrl_space_##name[ page_number/32 ]; \
 	static struct page_allocator name = { \
