@@ -17,4 +17,5 @@ module bitmask extends page_api {
 	source "bitmask.h"
 
 	@NoRuntime depends embox.lib.libds
+	@NoRuntime depends embox.kernel.spinlock
 }

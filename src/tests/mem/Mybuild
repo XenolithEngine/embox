@@ -49,3 +49,11 @@ module mprotect_test {
 
 	depends embox.compat.posix.sys.mman.mprotect
 }
+
+module phymem_smp {
+	source "phymem_smp.c"
+
+	depends embox.mem.phymem
+	depends embox.kernel.thread.core
+	depends embox.framework.LibFramework
+}
