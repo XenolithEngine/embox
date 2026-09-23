@@ -89,6 +89,10 @@
 #define UART_IER_TE   (1U << 6) /* DMA Rx End */
 #define UART_IER_RE   (1U << 7) /* DMA Tx End */
 
+#define UART_FCR_ENABLE   (1U << 0) /* FIFO enable */
+#define UART_FCR_RX_RESET (1U << 1) /* RX FIFO reset */
+#define UART_FCR_TX_RESET (1U << 2) /* TX FIFO reset */
+
 #define UART_LCR_PE   (1U << 3) /* Parity Enable */
 #define UART_LCR_EP   (1U << 4) /* Even Parity */
 #define UART_LCR_FP   (1U << 5) /* Force Parity */
@@ -131,6 +135,24 @@ static inline int uart_setup_hw(struct uart *dev) {
 #endif /* USE_BOARD_CONF */
 
 static int ns16550_setup(struct uart *dev, const struct uart_params *params) {
+	/* XENOLITH_UART_A2: canonical open-time clear, before any interrupt
+	 * source is raised. The 2026-09-23 storm was IIR 0xCC -- Character
+	 * Timeout Indication, the one 16550 source that reading LSR never
+	 * acknowledges: only an RHR read or an RX FIFO reset clears it, and
+	 * this setup never did either. U-Boot leaves the FIFOs enabled, so
+	 * a CTI latched during boot held the DW level line high the moment
+	 * the GIC enabled the irq; the handler saw DR=0 (LSR 0x60) and had
+	 * nothing it could acknowledge -- 8.7M entries until a real byte
+	 * forced an RHR read. Resetting both FIFOs also resets the RX
+	 * timeout counter; the RHR/LSR/MSR reads consume every
+	 * read-to-clear latch. Trigger stays at 1 byte (irq per character,
+	 * the pre-A2 behaviour). */
+	UART_REG_STORE(UART_FCR(dev->base_addr),
+			UART_FCR_ENABLE | UART_FCR_RX_RESET | UART_FCR_TX_RESET);
+	(void)UART_REG_LOAD(UART_RHR(dev->base_addr));
+	(void)UART_REG_LOAD(UART_LSR(dev->base_addr));
+	(void)UART_REG_LOAD(UART_MSR(dev->base_addr));
+
 	while (!(UART_REG_LOAD(UART_LSR(dev->base_addr)) & UART_LSR_TE)) {}
 
 	if (params->uart_param_flags & UART_PARAM_FLAGS_USE_IRQ) {

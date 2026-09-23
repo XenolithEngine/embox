@@ -90,21 +90,26 @@ int uart_open(struct uart *uart) {
 
 	uart_internal_init(uart);
 
-	/* XENOLITH_UART_OPEN_ORDER: uart_setup() raises the hardware's RX
-	 * interrupt source (ns16550: IER.DR) and uart_attach_irq() makes the
-	 * line live at the interrupt controller. In that order a byte that
-	 * piled up in the RX FIFO while the line was dead (typed during boot,
-	 * adapter noise) asserts the irq in the middle of uart_open(), in
-	 * unit-init context, before the handler/lthread pair is fully
-	 * published -- the Radxa Zero 3E kiosk hung there, intermittently,
-	 * right after "runlevel is 3". Mask the source first, attach, drain
-	 * the stale FIFO, and only then let setup() raise the source: the
-	 * first irq now fires from a clean state after open has returned. */
+	/* XENOLITH_SERIAL_CLEAR: the Zero 3E boot stall, solved 2026-09-23.
+	 * The DW 16550's RX-timeout latch (IIR 0xCC, Character Timeout
+	 * Indication) survives a boot with the irq line dead: U-Boot leaves
+	 * the FIFOs enabled, and CTI -- the one 16550 source that reading
+	 * LSR never acknowledges -- holds the level line high the moment
+	 * uart_attach_irq() enables it at the GIC. The handler saw DR=0 and
+	 * had nothing to acknowledge: millions of entries, nothing else
+	 * scheduled, boot wedged between "runlevel is 3" and "Default IO
+	 * device" until a real byte forced an RHR read. So: mask the source,
+	 * run setup while the GIC line is still dead -- ns16550_setup resets
+	 * both FIFOs (which also resets the RX timeout counter) and reads
+	 * RHR/LSR/MSR before raising IER.DR -- then drain any stale bytes,
+	 * and only then make the line live. A byte arriving between setup
+	 * and attach costs one clean DR irq, which the handler acknowledges
+	 * with its RHR reads. */
 	if (uops->uart_irq_dis) {
 		uops->uart_irq_dis(uart, &uart->params);
 	}
 
-	ret = uart_attach_irq(uart);
+	ret = uart_setup(uart);
 	if (ret) {
 		return ret;
 	}
@@ -115,7 +120,7 @@ int uart_open(struct uart *uart) {
 		}
 	}
 
-	return uart_setup(uart);
+	return uart_attach_irq(uart);
 }
 
 int uart_close(struct uart *uart) {
