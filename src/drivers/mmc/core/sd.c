@@ -40,6 +40,10 @@ int mmc_try_sd(struct mmc_host *host) {
 
 		mmc_send_cmd(host, SD_CMD_APP_CMD, 0, MMC_RSP_R1, resp);
 		if (resp[0] != CMD55_VALID_RESP) {
+			/* What is in RESP now is CMD55's R1, not an OCR, and the loop
+			 * condition would read its bit 31 -- OUT_OF_RANGE there -- as
+			 * "card ready". Not an answer to ACMD41 means not ready. */
+			resp[0] = 0;
 			continue;
 		}
 
@@ -76,11 +80,19 @@ int mmc_try_sd(struct mmc_host *host) {
 		log_debug("Size = %lld bytes (High-Capacity SD)", size);
 	}
 	else {
-		host->high_capacity = 0;
-		size = ((resp[1] >> 8) & 0x3) << 10;
-		size |= (resp[1] & 0xFF) << 2;
+		uint32_t c_size, c_size_mult, read_bl_len;
 
-		size = SD_STD_CAPACITY_MULT * (size + 1);
+		/* CSD v1: capacity = (C_SIZE + 1) * 2^(C_SIZE_MULT + 2) *
+		 * 2^READ_BL_LEN. C_SIZE is bits [73:62] and straddles two
+		 * words; this used to take its top ten bits only and a fixed
+		 * multiplier, which put a 256 MiB card at 267 649 024 bytes and
+		 * left the end of the card unreachable. */
+		host->high_capacity = 0;
+		read_bl_len = (resp[1] >> 16) & 0xF;
+		c_size = ((resp[1] & 0x3FF) << 2) | (resp[2] >> 30);
+		c_size_mult = (resp[2] >> 15) & 0x7;
+
+		size = (uint64_t)(c_size + 1) << (c_size_mult + 2 + read_bl_len);
 		log_debug("Size = %lld bytes (Standart Capacity SD)", size);
 	}
 
