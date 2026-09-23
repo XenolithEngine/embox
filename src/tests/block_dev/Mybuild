@@ -20,3 +20,11 @@ module bdev_base_test {
 	source "bdev_base_test.c"
 	depends embox.fs.driver.devfs
 }
+
+module bdev_idesc_test {
+	source "bdev_idesc_test.c"
+
+	depends embox.driver.ramdisk
+	depends embox.driver.block.partition
+	depends embox.framework.LibFramework
+}
