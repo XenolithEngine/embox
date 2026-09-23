@@ -16,8 +16,10 @@ unsigned long fdesc_dead_inode;
 unsigned long fdesc_stale_gen;
 
 /* A descriptor pins its dentry and the dentry its inode, so a changed
- * generation means a lost pin. DYING is the ordinary case: the name was
- * removed while open and the driver freed the file's data. */
+ * generation means a lost pin. A dying inode (its name removed while open) is
+ * answered while the driver keeps its private data on it: FAT keeps the
+ * clusters until the last reference (fat_destroy_inode). A driver that frees
+ * the data with the name clears the pointer, and the descriptor is refused. */
 int dvfs_file_valid(struct file_desc *desc) {
 	struct inode *inode = desc->f_inode;
 
@@ -28,7 +30,7 @@ int dvfs_file_valid(struct file_desc *desc) {
 		atomic_rmw_add_fetch(&fdesc_stale_gen, 1, __ATOMIC_RELAXED);
 		return -EBADF;
 	}
-	if (inode->i_dying) {
+	if (inode->i_dying && inode_priv(inode) == NULL) {
 		atomic_rmw_add_fetch(&fdesc_dead_inode, 1, __ATOMIC_RELAXED);
 		return -EBADF;
 	}
