@@ -12,6 +12,11 @@
  * There is no return path: EL0 comes back only through an exception, and
  * aarch64_sync_handler decides what that means.
  *
+ * Interrupts are masked from before the ELR_EL1 and SPSR_EL1 writes until the
+ * eret, which unmasks them in EL0 through SPSR_EL1. An exception taken in
+ * between overwrites both registers, and its return leaves ELR_EL1 holding a
+ * kernel address, which the eret would then run at EL0.
+ *
  * usermode_entry_clone does the same for a clone(220) child, whose stack, TLS
  * pointer and return address come from the caller. Its x0 = 0 is the ABI: it
  * is what clone() returns in the child.
@@ -27,6 +32,7 @@
  *   struct ue_data { void *ip; void *sp; }  -- kernel/usermode.h
  */
 usermode_entry:
+	msr	daifset, #0xf		/* until the eret: see the file comment */
 	ldr	x1, [x0, #0]		/* data->ip */
 	ldr	x2, [x0, #8]		/* data->sp */
 
@@ -82,6 +88,7 @@ usermode_entry:
  * where the parent did, on its own stack, and tells itself apart by x0 == 0.
  */
 usermode_entry_clone:
+	msr	daifset, #0xf		/* until the eret: see the file comment */
 	ldr	x1, [x0, #0]		/* data->ip  */
 	ldr	x2, [x0, #8]		/* data->sp  */
 	ldr	x3, [x0, #16]		/* data->tls */
