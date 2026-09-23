@@ -48,3 +48,11 @@ module mutex_pair {
 	depends embox.compat.posix.util.sleep
 	depends embox.framework.LibFramework
 }
+
+module gettid_test {
+	source "gettid_test.c"
+
+	depends embox.compat.linux.syscall_stub
+	depends embox.kernel.thread.core
+	depends embox.framework.LibFramework
+}
