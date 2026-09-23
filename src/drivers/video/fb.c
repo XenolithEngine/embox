@@ -428,7 +428,12 @@ static void fb_default_copyarea(struct fb_info *info, const struct fb_copyarea *
 }
 
 static uint32_t pixel_to_pat(uint32_t bpp, uint32_t pixel) {
-	pixel &= ~((uint32_t )-1 << bpp);
+	/* A shift by the full width is undefined, and AArch64 takes a register
+	 * shift amount modulo 32: at 32 bpp the old ~(-1 << bpp) was ~0xffffffff,
+	 * a mask of zero, and every fill came out black. */
+	if (bpp < 32) {
+		pixel &= ((uint32_t)1 << bpp) - 1;
+	}
 	return bpp == 1 ? 0xffffffffUL * pixel
 			: bpp == 2 ? 0x55555555UL * pixel
 			: bpp == 4 ? 0x11111111UL * pixel

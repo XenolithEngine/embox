@@ -1,0 +1,8 @@
+package embox.test.video
+
+module fb_fillrect_test {
+	source "fb_fillrect_test.c"
+
+	depends embox.driver.video.fb
+	depends embox.framework.LibFramework
+}
