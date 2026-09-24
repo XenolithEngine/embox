@@ -50,14 +50,16 @@ int scandir(const char *dir_name, struct dirent ***name_list,
 			temp_list = new_list;
 		}
 
-		// add the copy of dirent to the list
-		temp_list[num_dent] = (struct dirent *)malloc((dent->d_reclen + 3) & ~3);
+		/* add the copy of dirent to the list: the whole struct, since
+		 * d_reclen is a Linux-compatibility field no filesystem here has to
+		 * fill -- DVFS left it 0, and malloc(0) failed every scandir(). */
+		temp_list[num_dent] = (struct dirent *)malloc(sizeof(struct dirent));
 
 		if (!temp_list[num_dent]) {
 			goto out_err;
 		}
 
-		memcpy(temp_list[num_dent], dent, dent->d_reclen);
+		memcpy(temp_list[num_dent], dent, sizeof(struct dirent));
 		num_dent++;
 	}
 

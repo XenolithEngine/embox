@@ -46,6 +46,7 @@ static inline void fill_dirent(struct dirent *dirent, struct dentry *dentry) {
 	dirent->d_ino = (dentry->d_inode && dentry->d_inode->i_no > 0)
 	                    ? (ino_t)dentry->d_inode->i_no : 0;
 	dirent->d_type = dirent_type(dentry);
+	dirent->d_reclen = sizeof(*dirent);
 	memcpy(dirent->d_name, dentry->name, NAME_MAX);
 }
 

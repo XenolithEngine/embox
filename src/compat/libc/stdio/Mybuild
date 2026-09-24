@@ -9,6 +9,8 @@ static module print extends print_impl {
 
 	source "printf_impl.c"
 	source "printf_impl.h"
+	source "print_fp.c"
+	source "print_fp.h"
 
 	@NoRuntime depends embox.compat.libc.math
 	@NoRuntime depends embox.compat.libc.stdlib.core // atoi
@@ -190,11 +192,13 @@ static module scanf_without_file extends scanf_api {
 	source "scanf.c", "scanf_scanchar_without_file.c"
 }
 
+/* musl's scanf, v* forms included, over strings and FILEs (vfscanf.c). The
+ * old one stays above for the boards with no FILE at all. */
 static module scanf extends scanf_api {
-	source "scanf.c"
-	source "fscanf.c"
+	source "vfscanf.c"
 
-	depends file_ops /* ungetc() */
+	depends file_ops /* getc(), ungetc() */
+	@NoRuntime depends embox.compat.libc.stdlib.core /* __floatscan */
 }
 
 static module div {
