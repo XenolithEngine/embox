@@ -179,6 +179,18 @@ int rt_fib_source_ip(in_addr_t dst_ip, struct net_device *dev,
 		in_addr_t *src_ip) {
 	struct rt_entry *rte;
 
+	/* A destination on this host is reached from this host's own address, as
+	 * on Linux: 127.0.0.1 for loopback, the address itself for one of ours.
+	 * The table has no route for lo, so it would pick the default route. */
+	if (ipv4_is_loopback(dst_ip)) {
+		*src_ip = htonl(INADDR_LOOPBACK);
+		return 0;
+	}
+	if (dst_ip != INADDR_BROADCAST && ip_is_local(dst_ip, 0)) {
+		*src_ip = dst_ip;
+		return 0;
+	}
+
 	if (dst_ip != INADDR_BROADCAST) {
 		rte = rt_fib_get_best(dst_ip, NULL);
 		if (rte == NULL) {
