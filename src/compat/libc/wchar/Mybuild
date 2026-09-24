@@ -4,7 +4,13 @@ package embox.compat.libc
 abstract module wchar_extended {
 }
 
-static module wchar {
+/* The wide-character functions. An interface, so that an image can take them
+ * from another libc (board/common/musl in xenolith-os). */
+@DefaultImpl(wchar_embox)
+abstract module wchar {
+}
+
+static module wchar_embox extends wchar {
 	source "wcscmp.c"
 	source "wcsncpy.c"
 	source "wcstoimax.c"

@@ -24,7 +24,7 @@ package embox.cmd
 module test {
 	source "test.c"
 
-	depends embox.compat.libc.stdio.scanf
+	depends embox.compat.libc.stdio.scanf_api
 	depends embox.compat.posix.unistd.getopt
 	depends embox.framework.LibFramework
 }

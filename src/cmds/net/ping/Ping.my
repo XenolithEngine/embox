@@ -53,7 +53,7 @@ module ping {
 	depends embox.net.ipv4 /* sock_get_secure_level, skb_get_secure_level */
 	depends embox.compat.libc.stdio.file_ops
 	depends embox.compat.libc.stdio.perror
-	depends embox.compat.libc.stdio.scanf
+	depends embox.compat.libc.stdio.scanf_api
 	depends embox.kernel.timer.sys_timer
 	depends embox.compat.posix.net.socket
 	depends embox.compat.posix.net.inet_addr

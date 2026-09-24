@@ -5,6 +5,17 @@ static module locale {
 	source "freelocale.c"
 	source "localeconv.c"
 	source "newlocale.c"
-	source "setlocale.c"
 	source "uselocale.c"
+
+	@NoRuntime depends setlocale
+}
+
+/* An interface, so that an image can take setlocale from another libc
+ * (board/common/musl in xenolith-os), whose locale it then names. */
+@DefaultImpl(setlocale_embox)
+abstract module setlocale {
+}
+
+static module setlocale_embox extends setlocale {
+	source "setlocale.c"
 }

@@ -110,11 +110,16 @@ time_t mktime(struct tm *tm) {
 }
 
 char *asctime(const struct tm *timeptr) {
+    static char result[33];
+
+    return asctime_r(timeptr, result);
+}
+
+char *asctime_r(const struct tm *timeptr, char *result) {
     static char wday_name[7][4] = {
         "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
     };
 	extern const char months_short_names[12][4];
-    static char result[33];
 
     sprintf(result, "%.3s %.3s%3d %.2d:%.2d:%.2d %d\n",
         wday_name[timeptr->tm_wday],

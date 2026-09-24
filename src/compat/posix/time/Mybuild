@@ -24,7 +24,14 @@ module strptime {
 	@NoRuntime depends months_short_names
 }
 
-module time {
+/* Calendar time: gmtime/localtime/mktime, strftime/strptime, ctime/asctime,
+ * tzset. An interface, so that an image can take them from another libc
+ * (board/common/musl in xenolith-os). */
+@DefaultImpl(time_embox)
+abstract module time {
+}
+
+module time_embox extends time {
 	source "ctime.c"
 	source "strftime.c"
 
