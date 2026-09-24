@@ -67,13 +67,16 @@ int putenv(char *string) {
 	struct task_env *env;
 
 	assert(string != NULL);
-	//assert(*string != '=');
-	if(*string == '=') {
-		printf("Exported variable cannot be null\n");
+	if (*string == '=' || *string == '\0') {
+		/* No name. */
+		SET_ERRNO(EINVAL);
 		return -1;
 	}
 
-	assert(strchr(string, '=') != NULL);
+	if (strchr(string, '=') == NULL) {
+		/* A bare name removes the variable, as glibc and musl do. */
+		return unsetenv(string);
+	}
 
 	env = task_self_resource_env();
 	assert(env != NULL);
