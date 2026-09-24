@@ -73,6 +73,8 @@ typedef struct condattr pthread_condattr_t;
  */
 #define PTHREAD_COND_INITIALIZER COND_INIT_STATIC
 
+#define PTHREAD_RWLOCK_INITIALIZER RWLOCK_INIT_STATIC
+
 typedef struct mutex pthread_mutex_t;
 
 typedef struct mutexattr pthread_mutexattr_t;

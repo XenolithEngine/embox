@@ -19,6 +19,15 @@
 static void do_up(rwlock_t *r, int status);
 static int tryenter_sched_lock(rwlock_t *s, int status);
 
+/* RWLOCK_INIT_STATIC (PTHREAD_RWLOCK_INITIALIZER) cannot point the wait
+ * queue's list at itself; as with a mutex, the first user finishes it. Called
+ * under sched_lock(), so only one does. */
+static inline void rwlock_complete_static_init(rwlock_t *r) {
+	if (!(r->wq.list.next && r->wq.list.prev)) {
+		waitq_init(&r->wq);
+	}
+}
+
 void rwlock_init(rwlock_t *r) {
 	waitq_init(&r->wq);
 	r->status = RWLOCK_STATUS_NONE;
@@ -39,6 +48,7 @@ static void do_up(rwlock_t *r, int status) {
 
 	sched_lock();
 	{
+		rwlock_complete_static_init(r);
 		WAITQ_WAIT(&r->wq, !tryenter_sched_lock(r, status));
 	}
 	sched_unlock();
@@ -76,6 +86,7 @@ void rwlock_any_down(rwlock_t *r) {
 
 	sched_lock();
 	{
+		rwlock_complete_static_init(r);
 		r->count--;
 		if (r->count == 0) {
 			r->status = RWLOCK_STATUS_NONE;
