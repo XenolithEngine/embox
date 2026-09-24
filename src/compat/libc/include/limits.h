@@ -65,6 +65,7 @@
  * Maximum number of bytes in a character, for any supported locale.
  * Minimum Acceptable Value: 1
 */
-#define MB_LEN_MAX 1
+/* The most any supported locale takes: 4 for UTF-8. */
+#define MB_LEN_MAX 4
 
 #endif /* COMPAT_LIBC_LIMITS_H_ */

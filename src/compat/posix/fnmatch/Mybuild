@@ -1,5 +1,11 @@
 package embox.compat.posix
 
-static module fnmatch {
+/* An interface, so that an image can take fnmatch from another libc
+ * (board/common/musl in xenolith-os). */
+@DefaultImpl(fnmatch_embox)
+abstract module fnmatch {
+}
+
+static module fnmatch_embox extends fnmatch {
 	source "fnmatch.c"
 }

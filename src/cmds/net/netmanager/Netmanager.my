@@ -26,7 +26,7 @@ module netmanager {
 
 	depends embox.compat.libc.stdio.open
 	depends embox.compat.libc.stdio.print_impl
-	depends embox.compat.libc.stdio.scanf
+	depends embox.compat.libc.stdio.scanf_api
 	depends embox.compat.libc.stdlib.system
 	depends embox.compat.libc.str
 	depends embox.net.lib.getifaddrs
@@ -59,7 +59,7 @@ module net_service {
 
 	depends embox.compat.libc.stdio.open
 	depends embox.compat.libc.stdio.print_impl
-	depends embox.compat.libc.stdio.scanf
+	depends embox.compat.libc.stdio.scanf_api
 	depends embox.compat.libc.stdlib.system
 	depends embox.compat.libc.str
 }

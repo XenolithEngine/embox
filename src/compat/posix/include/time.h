@@ -42,7 +42,11 @@ struct tm {
 	int tm_wday;   /*Day of week [0,6] (Sunday =0). */
 	int tm_yday;   /*Day of year [0,365]. */
 	int tm_isdst;  /*Daylight Savings flag. */
-	int tm_gmtoff; /*Seconds east of UTC. */
+	/* As Linux and musl have them: a long, and the zone's abbreviation. It
+	 * was an int and nothing more, so a libc that fills struct tm the Linux
+	 * way wrote past the caller's. */
+	long tm_gmtoff;        /*Seconds east of UTC. */
+	const char *tm_zone;   /*Timezone abbreviation. */
 };
 
 struct timespec {
@@ -74,6 +78,7 @@ extern time_t mktime(struct tm *tm);
 
 /* convert date and time to a string */
 extern char *asctime(const struct tm *timeptr);
+extern char *asctime_r(const struct tm *timeptr, char *buf);
 
 extern int daylight;
 extern long timezone;

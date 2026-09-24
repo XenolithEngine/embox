@@ -17,7 +17,7 @@ module date {
 	source "date.c"
 
 	depends embox.compat.posix.time.time
-	depends embox.compat.libc.stdio.scanf
+	depends embox.compat.libc.stdio.scanf_api
 
 	depends embox.compat.posix.unistd.getopt
 

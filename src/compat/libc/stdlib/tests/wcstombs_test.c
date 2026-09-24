@@ -33,7 +33,7 @@ TEST_CASE("wctomb compare ABC") {
 	wchar_t test_string[] = TEST_STRING;
 	char buffer[10];
 
-	length = wctomb(buffer, test_string);
+	length = wctomb(buffer, test_string[0]);
 	test_assert(length == sizeof(char));
 	test_assert(buffer[0] == check_string[0]);
 }

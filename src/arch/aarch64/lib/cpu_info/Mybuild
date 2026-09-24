@@ -5,5 +5,5 @@ module cpu_info extends embox.arch.cpu_info {
 
 	@NoRuntime depends embox.lib.LibCpuInfo
 	@NoRuntime depends embox.compat.libc.str
-	@NoRuntime depends embox.compat.libc.stdio.print
+	@NoRuntime depends embox.compat.libc.stdio.print_impl
 }

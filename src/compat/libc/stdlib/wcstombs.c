@@ -21,12 +21,12 @@ size_t wcstombs(char *mbstr,  const wchar_t *wcstr, size_t max) {
 			return i;
 		}
 	
-		wctomb(mbstr, wcstr);
+		wctomb(mbstr, *wcstr);
 		mbstr++;
 		wcstr++;
 		i++;
 	}
-	wctomb(mbstr, wcstr); /* Сonvert '\0'*/
+	wctomb(mbstr, *wcstr); /* Сonvert '\0'*/
 
 	return i;
 }

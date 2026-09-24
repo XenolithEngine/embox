@@ -23,6 +23,6 @@ module nice {
 	depends embox.compat.posix.sys.resource
 	depends embox.compat.libc.str
 	depends embox.compat.libc.stdio.printf
-	depends embox.compat.libc.stdio.scanf
+	depends embox.compat.libc.stdio.scanf_api
 	depends embox.framework.cmd
 }

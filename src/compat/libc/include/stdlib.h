@@ -165,10 +165,13 @@ extern div_t div(int num, int denom);
 extern void abort(void);
 
 /* Integer expression whose value is the maximum number of bytes in a character
- * specified by the current locale.
- * MB_CUR_MAX >= 1
-*/
-#define MB_CUR_MAX 1
+ * specified by the current locale. MB_CUR_MAX >= 1.
+ *
+ * A function, as in glibc and musl, so that it is whatever the multibyte
+ * implementation in the image says: 1 for the native one (a byte per
+ * character), 4 for a UTF-8 one. */
+extern size_t __ctype_get_mb_cur_max(void);
+#define MB_CUR_MAX (__ctype_get_mb_cur_max())
 
 #define EXIT_FAILURE 1
 #define EXIT_SUCCESS 0
@@ -222,7 +225,7 @@ extern int mkstemps(char *path_template, int suffixlen);
 extern char *realpath(const char *file_name, char *resolved_name);
 
 extern int mbtowc(wchar_t *out, const char *in, size_t n);
-extern int wctomb(char *out, const wchar_t *in);
+extern int wctomb(char *out, wchar_t in);
 
 extern int mblen(const char *str, size_t max);
 

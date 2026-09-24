@@ -22,5 +22,5 @@ module coremark {
 	source "coremark.h"
 	
 	depends embox.compat.libc.math
-	depends embox.compat.libc.stdio.print
+	depends embox.compat.libc.stdio.print_impl
 }

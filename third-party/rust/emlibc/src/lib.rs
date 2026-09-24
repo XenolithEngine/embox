@@ -2031,7 +2031,7 @@ extern "C" {
     ) -> ::core::ffi::c_int;
 }
 extern "C" {
-    pub fn wctomb(out: *mut ::core::ffi::c_char, in_: *const wchar_t) -> ::core::ffi::c_int;
+    pub fn wctomb(out: *mut ::core::ffi::c_char, in_: wchar_t) -> ::core::ffi::c_int;
 }
 extern "C" {
     pub fn mblen(str_: *const ::core::ffi::c_char, max: size_t) -> ::core::ffi::c_int;

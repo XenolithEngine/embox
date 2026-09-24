@@ -61,5 +61,5 @@ module ifconfig {
 	depends embox.net.af_inet
 	depends embox.framework.LibFramework
 	depends embox.compat.libc.stdio.perror
-	depends embox.compat.libc.stdio.scanf
+	depends embox.compat.libc.stdio.scanf_api
 }

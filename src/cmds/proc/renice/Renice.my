@@ -25,6 +25,6 @@ module renice {
 	depends embox.compat.posix.sys.resource
 	depends embox.compat.posix.passwd
 	depends embox.compat.libc.stdio.printf
-	depends embox.compat.libc.stdio.scanf
+	depends embox.compat.libc.stdio.scanf_api
 	depends embox.compat.libc.str
 }

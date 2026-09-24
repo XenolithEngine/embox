@@ -6,8 +6,10 @@
  * @author Alexander Kalmuk
  */
 
-#include <wctype.h>
+#include <ctype.h>
+#include <stdint.h>
 #include <string.h>
+#include <wctype.h>
 
 /* Section "LC_CTYPE Category in the POSIX Locale" in
  * http://pubs.opengroup.org/onlinepubs/007904975/basedefs/xbd_chap07.html
@@ -49,10 +51,12 @@ wctype_t wctype(const char *property) {
 	return props[i].mask;
 }
 
+/* wctrans_t is a pointer (as on Linux); this implementation keeps a small
+ * number in it. */
 wctrans_t wctrans(const char *charclass) {
 	static const struct {
 		const char	*name;
-		wctrans_t	 type;
+		intptr_t	 type;
 	} classes[] = {
 		{ "tolower", _CTYPE_L },
 		{ "toupper", _CTYPE_U },
@@ -64,7 +68,7 @@ wctrans_t wctrans(const char *charclass) {
 		i++;
 	}
 
-	return classes[i].type;
+	return (wctrans_t)classes[i].type;
 }
 
 int iswctype(wint_t wc, wctype_t t) {
@@ -79,7 +83,7 @@ int iswctype(wint_t wc, wctype_t t) {
 wint_t towctrans(wint_t w, wctrans_t t) {
 	if (w == WEOF)
 		return WEOF;
-	switch (t) {
+	switch ((intptr_t)t) {
 	case _CTYPE_L:
 		return towlower(w);
 	case _CTYPE_U:
@@ -104,3 +108,22 @@ wint_t towupper(wint_t wc) {
 int iswspace(wint_t wc) {
 	return ((wc < (wint_t)0x100 ? isspace(wc) : 0));
 }
+
+/* The narrow classification, for the character set this implementation has:
+ * the first 256 code points. They were static inlines in <wctype.h>. */
+#define WCFUNC(class) \
+	int isw##class(wint_t wc) { \
+		return wc < (wint_t)0x100 ? is##class(wc) : 0; \
+	}
+
+WCFUNC(alnum)
+WCFUNC(alpha)
+WCFUNC(blank)
+WCFUNC(cntrl)
+WCFUNC(digit)
+WCFUNC(graph)
+WCFUNC(lower)
+WCFUNC(print)
+WCFUNC(punct)
+WCFUNC(upper)
+WCFUNC(xdigit)

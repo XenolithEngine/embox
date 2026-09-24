@@ -10,12 +10,12 @@
 
 #include <stdlib.h>
 
-int wctomb(char *out,  const wchar_t *in) {
-	if (in == NULL || out == NULL) {
+int wctomb(char *out, wchar_t in) {
+	if (out == NULL) {
 		return 0;
 	}
 
-	*out++ = *in++;
+	*out = (char)in;
 
 	return sizeof(char);
 }
