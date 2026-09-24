@@ -179,6 +179,21 @@ int rt_fib_source_ip(in_addr_t dst_ip, struct net_device *dev,
 		in_addr_t *src_ip) {
 	struct rt_entry *rte;
 
+	/* A destination on this host is reached from this host's own address, as
+	 * on Linux: 127.0.0.1 for loopback, the address itself for one of ours.
+	 * Asked of the table, 127.0.0.1 fell through to the default route (nothing
+	 * adds one for lo), and a UDP socket connect()ed to a loopback peer was
+	 * bound to eth0's address -- so every reply, addressed to 127.0.0.1, failed
+	 * its destination check and recv() waited forever. */
+	if (ipv4_is_loopback(dst_ip)) {
+		*src_ip = htonl(INADDR_LOOPBACK);
+		return 0;
+	}
+	if (dst_ip != INADDR_BROADCAST && ip_is_local(dst_ip, 0)) {
+		*src_ip = dst_ip;
+		return 0;
+	}
+
 	if (dst_ip != INADDR_BROADCAST) {
 		rte = rt_fib_get_best(dst_ip, NULL);
 		if (rte == NULL) {
