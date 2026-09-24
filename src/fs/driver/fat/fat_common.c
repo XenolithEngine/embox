@@ -1813,7 +1813,14 @@ uint32_t fat_write_file(struct fat_file_info *fi, uint8_t *p_scratch,
 			len, fi->volinfo->secperclus, fi->volinfo->bytepersec );
 
 	if (fi->firstcluster == 0) {
+		/* An empty file: its first cluster now. On a full volume that is
+		 * no cluster, and marking DFS_BAD_CLUS as a chain end would write
+		 * past the FAT. */
 		new_clus = fat_get_free_fat(fsi, fat_sector_buff);
+		if (new_clus == DFS_BAD_CLUS) {
+			*successcount = 0;
+			return DFS_ERRMISC;
+		}
 		fat_set_fat(fsi, fat_sector_buff, new_clus, fat_end_of_chain(fsi));
 		fi->firstcluster = fi->cluster = new_clus;
 	}
@@ -2276,6 +2283,9 @@ void fat_free_chain(struct fat_file_info *fi, uint8_t *p_scratch) {
 	struct fat_fs_info *fsi = fi->fsi;
 	uint32_t tempclus;
 
+	if (fi->firstcluster == 0) {
+		return; /* an empty file owns no cluster */
+	}
 	while (fi->firstcluster >= 2 && !fat_is_end_of_chain(fsi, fi->firstcluster)) {
 		tempclus = fi->firstcluster;
 		fi->firstcluster = fat_get_fat(fsi, p_scratch, fi->firstcluster);
@@ -2323,6 +2333,30 @@ static int fat_dirent_by_file(struct fat_file_info *fi, struct fat_dirent *de) {
 	return 0;
 }
 
+/* What ".." of a directory in @di holds: the first cluster of @di, or 0 when
+ * @di is the root -- on FAT32 as well, whatever cluster the root starts at.
+ * Read from @di's own entry in its parent, which is where fsck looks too.
+ * Uses fat_sector_buff. */
+static int fat_dotdot_clus(struct fat_fs_info *fsi, struct dirinfo *di,
+    uint32_t *clus) {
+	struct fat_file_info parent = {
+		.fsi = fsi,
+		.dirsector = di->fi.dirsector,
+		.diroffset = di->fi.diroffset,
+	};
+	struct fat_dirent pde;
+
+	*clus = 0;
+	if (di->fi.dirsector == 0) {
+		return 0;
+	}
+	if (fat_dirent_by_file(&parent, &pde)) {
+		return -1;
+	}
+	*clus = fat_direntry_get_clus(&pde);
+	return 0;
+}
+
 /**
  * @brief Read directory info from drive and set currentcluster,
  * current sector
@@ -2360,6 +2394,108 @@ int fat_reset_dir(struct dirinfo *di) {
 	return 0;
 }
 
+/* The 8.3 name that goes with a long one, as Windows and Linux make it: the
+ * basis from the name -- upper case, no spaces or dots in the base, anything
+ * an 8.3 name cannot hold as '_', eight and three -- and then "~N", the first
+ * N no other entry of the directory has.
+ *
+ * It used to be path_canonical_to_dir(), which is for names that already are
+ * 8.3: it laid a long name's characters into the eleven places one after
+ * another, so every name sharing a first eleven characters got the same short
+ * name ("fsck-dotdot-entry-000" .. "-399" were all FSCK-DOTDOT-), and a host
+ * fsck renamed all but one of them. Board logs named boot-0100.log onwards
+ * shared theirs the same way. */
+static uint8_t fat_short_char(char c) {
+	if (c >= 'a' && c <= 'z') {
+		return (uint8_t)(c - 'a' + 'A');
+	}
+	if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+	    || strchr("!#$%&'()-@^_`{}~", c)) {
+		return (uint8_t)c;
+	}
+	return '_';
+}
+
+static void fat_short_basis(const char *name, uint8_t out[MSDOS_NAME]) {
+	const char *dot = strrchr(name, '.');
+	const char *p;
+	int n;
+
+	memset(out, ' ', MSDOS_NAME);
+	if (dot == name) {
+		dot = NULL; /* ".profile": all base, no extension */
+	}
+
+	for (p = name, n = 0; *p && p != dot && n < 8; p++) {
+		if (*p == ' ' || *p == '.') {
+			continue;
+		}
+		out[n++] = fat_short_char(*p);
+	}
+	if (dot) {
+		for (p = dot + 1, n = 8; *p && n < MSDOS_NAME; p++) {
+			if (*p == ' ') {
+				continue;
+			}
+			out[n++] = fat_short_char(*p);
+		}
+	}
+	if (out[0] == ' ') {
+		out[0] = '_';
+	}
+}
+
+/* Whether some entry of DI already has the 8.3 name NAME. Walks a copy of
+ * DI, so the caller's position is kept; stops at the end of the directory
+ * rather than growing it, which fat_get_next() would do. Uses the scratch
+ * sector. */
+static int fat_short_name_taken(struct dirinfo *di, const uint8_t *name) {
+	struct dirinfo d = *di;
+	const struct fat_dirent *e;
+
+	fat_reset_dir(&d);
+	if (read_dir_buf(&d)) {
+		return 0;
+	}
+	while (fat_fetch_dir(&d) == DFS_OK) {
+		e = &((const struct fat_dirent *) d.p_scratch)[d.currententry];
+		if (e->name[0] == 0x00) {
+			return 0;
+		}
+		if (e->name[0] != 0xe5 && e->attr != ATTR_LONG_NAME
+		    && !memcmp(e->name, name, MSDOS_NAME)) {
+			return 1;
+		}
+		d.currententry++;
+	}
+	return 0;
+}
+
+static int fat_short_name_make(struct dirinfo *di, const char *name,
+    uint8_t filename[MSDOS_NAME + 1]) {
+	uint8_t basis[MSDOS_NAME];
+	char tail[8];
+	unsigned num;
+	int blen, tlen;
+
+	fat_short_basis(name, basis);
+	for (blen = 8; blen > 0 && basis[blen - 1] == ' '; blen--) {
+	}
+
+	for (num = 1; num < 1000000; num++) {
+		tlen = snprintf(tail, sizeof(tail), "~%u", num);
+		memcpy(filename, basis, MSDOS_NAME);
+		memset(filename, ' ', 8);
+		memcpy(filename, basis, blen < 8 - tlen ? blen : 8 - tlen);
+		memcpy(filename + (blen < 8 - tlen ? blen : 8 - tlen), tail, tlen);
+		filename[MSDOS_NAME] = '\0';
+		if (!fat_short_name_taken(di, filename)) {
+			return 0;
+		}
+	}
+	return -EEXIST;
+}
+
 /* Makes room for NAME in DI -- its long-name entries, written, and the slot
  * for the 8.3 entry after them, which DI is left pointing at -- and puts the
  * 8.3 form of the name in FILENAME. Returns 0 or a negative errno. */
@@ -2372,6 +2508,15 @@ static int fat_write_name(struct dirinfo *di, const char *name,
 
 	entries = fat_entries_per_name(name);
 
+	/* Before the room is made: the search walks the directory through the
+	 * scratch sector, which the writing below then owns. */
+	if (entries > 1) {
+		res = fat_short_name_make(di, name, filename);
+		if (res < 0) {
+			return res;
+		}
+	}
+
 	res = fat_get_free_entries(di, entries);
 	if (res < 0) {
 		return res;
@@ -2380,7 +2525,6 @@ static int fat_write_name(struct dirinfo *di, const char *name,
 	fat_dir_rewind(di, res);
 
 	if (entries > 1) {
-		path_canonical_to_dir((char *) filename, (char *) name);
 		/* Write long-name descriptors */
 		for (int i = entries - 1; i >= 1; i--) {
 			memset(&de, 0, sizeof(de));
@@ -2404,7 +2548,13 @@ static int fat_write_name(struct dirinfo *di, const char *name,
 			}
 		}
 	} else {
-		memcpy(filename, name, 12);
+		/* Already 8.3 (fat_entries_per_name: at most eight of A-Z, 0-9 and
+		 * space, no dot), so all base: padded with spaces, as on the media.
+		 * It was a 12-byte memcpy of the string -- NUL padding in the entry,
+		 * and a read past the end of a short name. */
+		memset(filename, ' ', MSDOS_NAME);
+		memcpy(filename, name, strlen(name));
+		filename[MSDOS_NAME] = '\0';
 	}
 
 	return 0;
@@ -2425,7 +2575,7 @@ int fat_rename_file(struct fat_file_info *fi, struct dirinfo *newdi,
 	fat_lock_assert("fat_rename_file");
 	struct fat_fs_info *fsi = fi->fsi;
 	struct dirinfo *olddi = fi->fdi;
-	struct fat_dirent de, pde;
+	struct fat_dirent de;
 	uint8_t filename[12];
 	uint32_t old_sector, old_offset, new_sector, new_offset;
 	uint32_t pclus, sec;
@@ -2468,14 +2618,9 @@ int fat_rename_file(struct fat_file_info *fi, struct dirinfo *newdi,
 	fi->fdi = newdi;
 
 	if ((de.attr & ATTR_DIRECTORY) && newdi != olddi) {
-		/* A directory that moved: its ".." names the new parent, and the
-		 * root is 0 there whatever cluster it is in. */
-		pclus = 0;
-		if (newdi->fi.dirsector != 0) {
-			if (fat_dirent_by_file(&newdi->fi, &pde)) {
-				return DFS_ERRMISC;
-			}
-			pclus = fat_direntry_get_clus(&pde);
+		/* A directory that moved: its ".." names the new parent. */
+		if (fat_dotdot_clus(fsi, newdi, &pclus)) {
+			return DFS_ERRMISC;
 		}
 
 		sec = fat_sec_by_clus(fsi, fat_direntry_get_clus(&de));
@@ -2496,11 +2641,16 @@ int fat_rename_file(struct fat_file_info *fi, struct dirinfo *newdi,
  * Create a file or directory. Returns 0, or a negative errno: -ENOSPC when
  * the volume has no cluster for it or the directory no room for its name.
  *
- * The cluster is taken first and marked end-of-chain at once, before the name
- * is written. The other order wrote the name and then asked for a cluster, so
- * a full volume got an entry pointing at DFS_BAD_CLUS; and a cluster found but
- * not yet marked could be handed a second time to the directory extension
- * that making room for the name may need.
+ * A directory's cluster is taken first and marked end-of-chain at once,
+ * before the name is written. The other order wrote the name and then asked
+ * for a cluster, so a full volume got an entry pointing at DFS_BAD_CLUS; and a
+ * cluster found but not yet marked could be handed a second time to the
+ * directory extension that making room for the name may need.
+ *
+ * A regular file gets none: an empty file is cluster 0 and size 0, and the
+ * first write takes a cluster (fat_write_file). It used to get one here, and
+ * a host fsck found every empty file this driver ever made with a chain
+ * longer than its size, and truncated it.
  */
 int fat_create_file(struct fat_file_info *fi, struct dirinfo *di, char *name, int mode) {
 	uint8_t filename[12];
@@ -2529,18 +2679,23 @@ int fat_create_file(struct fat_file_info *fi, struct dirinfo *di, char *name, in
 
 	di->fi.fsi = fsi;
 
-	cluster = fat_get_free_fat(fsi, fat_sector_buff);
-	if (cluster == DFS_BAD_CLUS) {
-		return -ENOSPC;
-	}
-	if (DFS_OK != fat_set_fat(fsi, fat_sector_buff, cluster,
-	        fat_end_of_chain(fsi))) {
-		return -EIO;
+	cluster = 0;
+	if (S_ISDIR(mode)) {
+		cluster = fat_get_free_fat(fsi, fat_sector_buff);
+		if (cluster == DFS_BAD_CLUS) {
+			return -ENOSPC;
+		}
+		if (DFS_OK != fat_set_fat(fsi, fat_sector_buff, cluster,
+		        fat_end_of_chain(fsi))) {
+			return -EIO;
+		}
 	}
 
 	res = fat_write_name(di, name, filename);
 	if (res < 0) {
-		fat_set_fat(fsi, fat_sector_buff, cluster, 0);
+		if (cluster) {
+			fat_set_fat(fsi, fat_sector_buff, cluster, 0);
+		}
 		return res;
 	}
 
@@ -2563,6 +2718,17 @@ int fat_create_file(struct fat_file_info *fi, struct dirinfo *di, char *name, in
 	}
 
 	if (S_ISDIR(mode)) {
+		uint32_t pclus;
+
+		/* ".." is the parent's FIRST cluster, 0 for the root (BF-16). It was
+		 * di->currentcluster -- the cluster of the parent that the new entry
+		 * happened to land in, which is the first one only while the parent
+		 * is shorter than a cluster, and never 0 for a FAT32 root. Taken
+		 * before the clear below: both go through fat_sector_buff. */
+		if (fat_dotdot_clus(fsi, di, &pclus)) {
+			return -EIO;
+		}
+
 		/* Zero the whole cluster before writing . and .. entries.
 		 * Previously only one sector was written from a buffer that had
 		 * leftover data, causing directory scans to read garbage entries.
@@ -2573,7 +2739,7 @@ int fat_create_file(struct fat_file_info *fi, struct dirinfo *di, char *name, in
 		}
 
 		/* create . and ..  files of this catalog */
-		fat_set_direntry(di->currentcluster, fi->cluster);
+		fat_set_direntry(pclus, fi->cluster);
 		cluster = fi->volinfo->dataarea +
 				  ((fi->cluster - 2) * fi->volinfo->secperclus);
 		if (fat_write_sector(fsi, fat_sector_buff, cluster)) {
@@ -2700,7 +2866,9 @@ int fat_entries_per_name(const char *name) {
 
 	l = strlen(name);
 
-	if (l > MSDOS_NAME) {
+	/* Eight, not eleven: with no dot allowed the whole name is the base,
+	 * and a ninth character would land in the extension. */
+	if (l > 8) {
 		old_compat = false;
 	} else {
 		for (int i = 0; i < l; i++) {
