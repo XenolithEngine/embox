@@ -191,8 +191,18 @@ uintptr_t *mmu_get_root(mmu_ctx_t ctx) {
 	return (uintptr_t *)FIELD_GET(ctx, TTBRn_ELn_BADDR);
 }
 
+/* After a change to page tables: every core, not this one. The tables of a
+ * task are walked by all the cores its threads run on, and a local TLBI
+ * (which this was, with no barriers either) left the others translating
+ * through what munmap had just taken away -- harmless only while an unmapped
+ * user address was never given out again (A1, BF-73). The DSB before makes
+ * the descriptor writes visible to the walkers; the one after waits for the
+ * invalidation to finish everywhere. */
 void mmu_flush_tlb(void) {
-	ARCH_REG_STORE(TLBI_VMALLE1, 0);
+	__asm__ __volatile__("dsb ishst" : : : "memory");
+	ARCH_REG_STORE(TLBI_VMALLE1IS, 0);
+	__asm__ __volatile__("dsb ish" : : : "memory");
+	isb();
 }
 
 mmu_vaddr_t mmu_get_fault_address(void) {
