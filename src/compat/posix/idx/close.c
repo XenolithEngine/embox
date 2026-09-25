@@ -11,6 +11,10 @@
 #include <kernel/task/resource/index_descriptor.h>
 #include <kernel/task/resource/idesc.h>
 
+/* Drops the task's record locks on the file (fs/dvfs/dvfs_lockf.c), if a file
+ * system keeps any. */
+extern void idesc_close_locks(struct idesc *idesc) __attribute__((weak));
+
 int close(int fd) {
 	int ret;
 	struct idesc *idesc;
@@ -18,6 +22,12 @@ int close(int fd) {
 	if (!idesc_index_valid(fd)
 			|| (NULL == (idesc = index_descriptor_get(fd)))) {
 		return SET_ERRNO(EBADF);
+	}
+
+	/* POSIX: closing any descriptor of a file drops every record lock the
+	 * process holds on it -- this one need not be the one that took them. */
+	if (idesc_close_locks) {
+		idesc_close_locks(idesc);
 	}
 
 	ret = idesc_close(idesc, fd);
