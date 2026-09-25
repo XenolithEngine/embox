@@ -16,7 +16,14 @@ TASK_RESOURCE_DEF(task_errno_desc, int);
 
 static size_t task_errno_offset;
 
+/* POSIX: errno is 0 when a program starts. The resource space is carved out of
+ * a task block the allocator poisons on free (0x53). */
+static void task_errno_init(const struct task *task, void *space) {
+	*(int *)space = 0;
+}
+
 static const struct task_resource_desc task_errno_desc = {
+	.init = task_errno_init,
 	.resource_size = sizeof(int),
 	.resource_offset = &task_errno_offset
 };
