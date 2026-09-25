@@ -77,8 +77,14 @@ static int vmem_entry_set_pte(struct mmu_entry *entry, mmu_paddr_t phy_addr,
 
 	for (i = 0; i < MMU_LAST_LEVEL; i++) {
 		if (!mmu_present(i, entry->table[i] + entry->idx[i])) {
+			/* Out of table pages is an error to report, not a table to
+			 * pretend: a NULL written into the entry above, and the next
+			 * level dereferenced through it, was an assert in mmu_pte_set()
+			 * and the whole system down -- after ~1300 user programs had
+			 * each leaked some tables (A1, docs/EMBOX-USER-WM.md A4). */
 			if (!(entry->table[i + 1] = vmem_alloc_table(i + 1))) {
 				log_error("Failed to alloc table lvl%d\n", i);
+				return -ENOMEM;
 			}
 
 			mmu_set(i, entry->table[i] + entry->idx[i],
@@ -103,12 +109,23 @@ static int vmem_entry_try_free(struct mmu_entry *entry) {
 int vmem_map_region(mmu_ctx_t ctx, mmu_paddr_t phy_addr, mmu_vaddr_t virt_addr,
     size_t reg_size, int flags) {
 	struct mmu_entry entries;
+	mmu_vaddr_t start = virt_addr;
+	int err;
 
 	for (; reg_size; reg_size -= MMU_PAGE_SIZE) {
 		vmem_entry_get_idxs(ctx, virt_addr, &entries);
 		vmem_entry_get_tables(ctx, virt_addr, &entries);
 
-		vmem_entry_set_pte(&entries, phy_addr, flags);
+		err = vmem_entry_set_pte(&entries, phy_addr, flags);
+		if (err) {
+			/* All or nothing: what this call mapped goes again, so a
+			 * caller that sees the error has nothing half-mapped to undo. */
+			if (virt_addr != start) {
+				vmem_unmap_region(ctx, start, virt_addr - start);
+			}
+			mmu_flush_tlb();
+			return err;
+		}
 		phy_addr += MMU_PAGE_SIZE;
 		virt_addr += MMU_PAGE_SIZE;
 	}
