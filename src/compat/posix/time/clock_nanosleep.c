@@ -66,14 +66,45 @@ int clock_nanosleep(clockid_t clock_id, int flags, const struct timespec *rqtp,
 		timetowake = timespec_add(now, *rqtp);
 	}
 
-	ms_tosleep = timespec_to_ms(&timetosleep);
-	if (ms_tosleep > 0) {
-		ksleep(ms_tosleep - 1);
-	}
+	/* Sleep, in whole milliseconds rounded up, until the wake time -- never
+	 * spin for it. It was one ksleep() of timespec_to_ms(), a uint32_t that
+	 * wraps on a long request, and then a spin on the clock to the exact
+	 * nanosecond. A spin is not safe here: called from a system call it runs
+	 * with the timer interrupt not getting through, the clock it reads can
+	 * stop between ticks, and the loop never ends -- a user-mode program's
+	 * 1 ms sleep then held the only core for good (tests/runtime
+	 * runtime_dispatch, A1). POSIX allows a sleep to run over; it does not
+	 * allow it not to return. ksleep() may also come back early, hence the
+	 * loop. */
+	(void)timetosleep;
+	for (;;) {
+		struct timespec left;
+		uint64_t ms;
 
-	do {
 		ktime_get_timespec(&now);
-	} while (timespeccmp(&now, &timetowake, <));
+		if (!timespeccmp(&now, &timetowake, <)) {
+			break;
+		}
+		left = timespec_sub(timetowake, now);
+		ms = (uint64_t)left.tv_sec * MSEC_PER_SEC
+		     + ((uint64_t)left.tv_nsec + NSEC_PER_MSEC - 1) / NSEC_PER_MSEC;
+		if (ms > 0x7fffffffU) {
+			ms = 0x7fffffffU;
+		}
+		ms_tosleep = (uint32_t)ms;
+		if (ksleep(ms_tosleep) == -EINTR) {
+			/* Interrupted -- a signal, or the task being torn down under
+			 * this thread. Calling ksleep() again would only come straight
+			 * back, so say so, with what was left. */
+			if (rmtp != NULL) {
+				ktime_get_timespec(&now);
+				*rmtp = timespeccmp(&now, &timetowake, <)
+				            ? timespec_sub(timetowake, now)
+				            : (struct timespec){0, 0};
+			}
+			return EINTR;
+		}
+	}
 
 	if (rmtp != NULL) {
 		rmtp->tv_nsec = 0;
@@ -86,7 +117,15 @@ int clock_nanosleep(clockid_t clock_id, int flags, const struct timespec *rqtp,
 /* XXX: nanosleep is irq sensetive, i.e. rqtp can be exceeded when irq occur
  * after ksleep and before returning from nanosleep. */
 int nanosleep(const struct timespec *rqtp, struct timespec *rmtp) {
-	return clock_nanosleep(CLOCK_REALTIME, 0, rqtp, rmtp);
+	int err;
+
+	/* clock_nanosleep() returns the error; nanosleep() says it through
+	 * errno, as POSIX has the two. It returned the number itself. */
+	err = clock_nanosleep(CLOCK_REALTIME, 0, rqtp, rmtp);
+	if (err) {
+		return SET_ERRNO(err);
+	}
+	return 0;
 }
 
 // static void cs_nanospin(struct clock_source *cs, struct hw_time *hw) {
