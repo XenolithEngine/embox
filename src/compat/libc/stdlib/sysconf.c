@@ -14,6 +14,29 @@
 #include <mem/page.h>
 #include <hal/cpu.h>
 
+struct thread;
+/* kernel/cpu: a started core has an idle thread. Weak, so that a build
+ * without that module answers NCPU as before. */
+extern struct thread *cpu_get_idle(unsigned int cpu_id) __attribute__((weak));
+
+/* The cores that are running, not the ones the build allows for: a thread
+ * pool sized from NCPU on a board (or a QEMU -smp) with fewer cores puts
+ * several busy threads on each. */
+static long cpus_online(void) {
+	long n = 0;
+	unsigned int i;
+
+	if (!cpu_get_idle) {
+		return NCPU;
+	}
+	for (i = 0; i < NCPU; i++) {
+		if (cpu_get_idle(i) != NULL) {
+			n++;
+		}
+	}
+	return n ? n : 1;
+}
+
 long int sysconf(int name) {
 	switch(name) {
 	case _SC_PAGESIZE:
@@ -22,7 +45,7 @@ long int sysconf(int name) {
 		return CLK_TCK;
 	case _SC_NPROCESSORS_ONLN:
 	//http://www.gnu.org/software/libc/manual/html_node/Processor-Resources.html
-		return NCPU;
+		return cpus_online();
 	case _SC_GETPW_R_SIZE_MAX:
 		return 0x200;
 	case _SC_ATEXIT_MAX:
