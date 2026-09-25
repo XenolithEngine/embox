@@ -66,14 +66,38 @@ int clock_nanosleep(clockid_t clock_id, int flags, const struct timespec *rqtp,
 		timetowake = timespec_add(now, *rqtp);
 	}
 
-	ms_tosleep = timespec_to_ms(&timetosleep);
-	if (ms_tosleep > 0) {
-		ksleep(ms_tosleep - 1);
-	}
+	/* Sleep, in whole milliseconds rounded up, until the wake time; never spin
+	 * on the clock. Called from a system call this runs with the timer
+	 * interrupt not getting through, the clock can stop between ticks, and a
+	 * spin would never end. ksleep() may come back early, hence the loop. */
+	(void)timetosleep;
+	for (;;) {
+		struct timespec left;
+		uint64_t ms;
 
-	do {
 		ktime_get_timespec(&now);
-	} while (timespeccmp(&now, &timetowake, <));
+		if (!timespeccmp(&now, &timetowake, <)) {
+			break;
+		}
+		left = timespec_sub(timetowake, now);
+		ms = (uint64_t)left.tv_sec * MSEC_PER_SEC
+		     + ((uint64_t)left.tv_nsec + NSEC_PER_MSEC - 1) / NSEC_PER_MSEC;
+		if (ms > 0x7fffffffU) {
+			ms = 0x7fffffffU;
+		}
+		ms_tosleep = (uint32_t)ms;
+		if (ksleep(ms_tosleep) == -EINTR) {
+			/* A signal, or the task being torn down under this thread:
+			 * ksleep() would only come straight back. */
+			if (rmtp != NULL) {
+				ktime_get_timespec(&now);
+				*rmtp = timespeccmp(&now, &timetowake, <)
+				            ? timespec_sub(timetowake, now)
+				            : (struct timespec){0, 0};
+			}
+			return EINTR;
+		}
+	}
 
 	if (rmtp != NULL) {
 		rmtp->tv_nsec = 0;
@@ -86,7 +110,15 @@ int clock_nanosleep(clockid_t clock_id, int flags, const struct timespec *rqtp,
 /* XXX: nanosleep is irq sensetive, i.e. rqtp can be exceeded when irq occur
  * after ksleep and before returning from nanosleep. */
 int nanosleep(const struct timespec *rqtp, struct timespec *rmtp) {
-	return clock_nanosleep(CLOCK_REALTIME, 0, rqtp, rmtp);
+	int err;
+
+	/* clock_nanosleep() returns the error; nanosleep() says it through
+	 * errno, as POSIX has the two. */
+	err = clock_nanosleep(CLOCK_REALTIME, 0, rqtp, rmtp);
+	if (err) {
+		return SET_ERRNO(err);
+	}
+	return 0;
 }
 
 // static void cs_nanospin(struct clock_source *cs, struct hw_time *hw) {
