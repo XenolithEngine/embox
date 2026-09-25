@@ -191,8 +191,14 @@ uintptr_t *mmu_get_root(mmu_ctx_t ctx) {
 	return (uintptr_t *)FIELD_GET(ctx, TTBRn_ELn_BADDR);
 }
 
+/* Every core: a task's tables are walked by all the cores its threads run on.
+ * The DSB before makes the descriptor writes visible to the walkers; the one
+ * after waits for the invalidation to finish everywhere. */
 void mmu_flush_tlb(void) {
-	ARCH_REG_STORE(TLBI_VMALLE1, 0);
+	__asm__ __volatile__("dsb ishst" : : : "memory");
+	ARCH_REG_STORE(TLBI_VMALLE1IS, 0);
+	__asm__ __volatile__("dsb ish" : : : "memory");
+	isb();
 }
 
 mmu_vaddr_t mmu_get_fault_address(void) {
