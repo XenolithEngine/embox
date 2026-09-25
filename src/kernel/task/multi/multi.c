@@ -30,6 +30,10 @@
 #include <util/binalign.h>
 #include <util/err.h>
 #include <util/atomic_rmw.h>
+#include <util/log.h>
+#include <hal/cpu.h>
+#include <kernel/critical.h>
+#include <kernel/time/ktime.h>
 
 #if OPTION_GET(NUMBER, task_quantity)
 extern struct thread *main_thread_create(unsigned int flags, size_t stack_sz,
@@ -343,6 +347,115 @@ static void task_make_children_daemons(struct task *task) {
 	}
 }
 
+int task_thread_killed(struct thread *t) {
+	struct task *task;
+
+	if (!t || !(task = t->task)) {
+		return 0;
+	}
+	return atomic_rmw_load(&task->tsk_exiting, __ATOMIC_ACQUIRE)
+	       && (task->tsk_exiter != t);
+}
+
+/* Off every CPU and not runnable: blocked, or through thread_exit(). */
+static inline int task_thread_quiet(struct thread *t) {
+	return t->schedee.released && !t->schedee.ready;
+}
+
+/* Stop every other thread of the exiting task before anything is taken from
+ * it -- close the window thread_terminate() could only narrow.
+ *
+ * thread_terminate() cannot stop a thread that is running on another core,
+ * and it abandons a blocked one mid-wait, with whatever it had linked on its
+ * stack still linked. Freeing the task's resources after that let the other
+ * thread walk freed page tables in a system call and read a freed errno (A1:
+ * libc++'s thread.thread.member/detach on four cores took the kernel down).
+ *
+ * So the threads are made to leave on their own. They are killed
+ * (task_thread_killed(): tsk_exiter is set, tsk_exiting already is), which
+ * ends any wait they are in with -EINTR, and a killed thread is diverted to
+ * thread_exit() wherever it would go back to user mode (the aarch64 exception
+ * return paths). The blocked ones are woken to get there; the running ones
+ * get a reschedule IPI, whose interrupt return is such a point. This waits,
+ * with the scheduler lock released so that they can run, until every one of
+ * them is quiet -- off every CPU and not runnable -- and returns holding the
+ * lock again, as it was called.
+ *
+ * A thread that does not come -- blocked in a wait that is not a
+ * sched_wait() and so cannot be interrupted -- is quiet too, and is torn down
+ * as before. One that stays runnable is reported after five seconds and the
+ * teardown goes ahead: the old behaviour, now the exception. Five, not one:
+ * on one core the scheduler slices every 100 ms, and a task with a handful of
+ * threads spinning in user mode needs several slices before each of them has
+ * been on the CPU once to see it is killed. */
+static void task_quiesce(struct task *task, struct thread *main_thr) {
+	struct thread *self = thread_self();
+	struct thread *thr;
+	unsigned int depth;
+	time64_t deadline;
+	int busy, running;
+
+	task->tsk_exiter = self;
+
+	/* The lock can only be given up if this is its one level: the callers
+	 * take it in task_start_exit() and nothing else. */
+	depth = (critical_count() & CRITICAL_SCHED_LOCK)
+	        / __CRITICAL_COUNT(CRITICAL_SCHED_LOCK);
+	if (depth != 1) {
+		log_error("task %d: exiting with the scheduler lock held %u times; "
+		          "not waiting for its threads", task->tsk_id, depth);
+		return;
+	}
+
+	if ((main_thr != self) && main_thr->schedee.waiting
+	    && !main_thr->schedee.finished) {
+		sched_wakeup(&main_thr->schedee);
+	}
+	dlist_foreach_entry(thr, &main_thr->thread_link, thread_link) {
+		if ((thr != self) && thr->schedee.waiting && !thr->schedee.finished) {
+			sched_wakeup(&thr->schedee);
+		}
+	}
+
+	deadline = ktime_get_ns() + 5000000000LL;
+	for (;;) {
+		busy = running = 0;
+		if ((main_thr != self) && !task_thread_quiet(main_thr)) {
+			busy++;
+			running |= main_thr->schedee.active;
+		}
+		dlist_foreach_entry(thr, &main_thr->thread_link, thread_link) {
+			if ((thr != self) && !task_thread_quiet(thr)) {
+				busy++;
+				running |= thr->schedee.active;
+			}
+		}
+		if (!busy) {
+			return;
+		}
+		if (ktime_get_ns() > deadline) {
+			log_error("task %d: %d thread(s) still runnable five seconds into "
+			          "its exit; tearing it down anyway", task->tsk_id, busy);
+			return;
+		}
+#ifdef SMP
+		if (running) {
+			extern void smp_send_resched(int cpu_id);
+			int cpu;
+
+			for (cpu = 0; cpu < NCPU; cpu++) {
+				if (cpu != (int)cpu_get_id()) {
+					smp_send_resched(cpu);
+				}
+			}
+		}
+#endif
+		sched_unlock();
+		ksleep(1);
+		sched_lock();
+	}
+}
+
 void task_do_exit(struct task *task, int status) {
 	struct thread *thr = NULL;
 	struct thread *main_thr;
@@ -374,6 +487,10 @@ void task_do_exit(struct task *task, int status) {
 	main_thr = task->tsk_main;
 	assert(main_thr);
 
+	/* Every other thread of the task off the CPUs and out of the kernel
+	 * first; see task_quiesce(). */
+	task_quiesce(task, main_thr);
+
 	/* Stop the threads BEFORE taking the resources away from them.
 	 *
 	 * Upstream deinitialises the resources first -- files, the task heap, the
@@ -383,11 +500,11 @@ void task_do_exit(struct task *task, int status) {
 	 * threads are running, and what is being pulled out from under them is the
 	 * heap their next free() looks in.
 	 *
-	 * thread_terminate() still cannot stop a thread that is running on another
-	 * core this instant -- it takes the schedee out of the run queue and marks
-	 * it, and the thread carries on until it next schedules. So this narrows
-	 * the window rather than closing it; what closes it for a given thread is
-	 * joining it, which is what its creator is for. */
+	 * thread_terminate() cannot stop a thread that is running on another core
+	 * this instant -- it takes the schedee out of the run queue and marks it,
+	 * and the thread carries on until it next schedules. That used to be the
+	 * window this left open; task_quiesce() above has now closed it, and every
+	 * thread terminated here is already off the CPUs and out of the kernel. */
 	dlist_foreach_entry(thr, &main_thr->thread_link, thread_link) {
 		thread_terminate(thr);
 		thread_delete(thr);

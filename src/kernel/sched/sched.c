@@ -756,7 +756,10 @@ static void __schedule(int preempt) {
 
 	yield_requested = sched_yield_requested();
 
-	if (!preempt && prev->waiting)
+	/* A finished schedee is never put back: thread_terminate() of a thread
+	 * running on another core clears `waiting` (sched_freeze), and a preempt
+	 * would otherwise queue a thread whose owner has let it go. */
+	if (prev->finished || (!preempt && prev->waiting))
 		prev->ready = false;
 		/* In SMP kernel starting from this point and until clearing
 		 * prev->active state (which is done by '__sched_deactivate')

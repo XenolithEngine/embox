@@ -55,6 +55,8 @@
 #include <util/log.h>
 
 #include <hal/fault_log.h>
+#include <kernel/task.h>
+#include <kernel/thread.h>
 
 #include "exception.h"
 
@@ -157,6 +159,19 @@ static int from_el0(const struct excpt_context *ctx) {
 	return (ctx->psr & SPSR_ELn_M_MASK) == SPSR_ELn_M_EL0t;
 }
 
+/* Xenolith: a thread whose task is being torn down by another of its threads
+ * does not go back to EL0. task_do_exit() is waiting for it to leave; the
+ * frame is turned into a thread exit, as for an exit(93) of its own. Called at
+ * each point an exception returns to EL0 -- after a system call, and at the
+ * end of an interrupt, which is where a reschedule IPI brings a thread that
+ * was running user code on another core. */
+void aarch64_el0_return_check(struct excpt_context *ctx) {
+	if (from_el0(ctx) && task_thread_killed(thread_self())) {
+		xl_thread_exiting();
+		usermode_leave(ctx, EL0_DEAD_EXIT);
+	}
+}
+
 static void print_abort_syndrome(uint32_t syndrome) {
 	int el;
 	unsigned dfsc;
@@ -254,8 +269,14 @@ void aarch64_sync_handler(struct excpt_context *ctx) {
 			xl_thread_exiting();
 			usermode_leave_group(ctx, ctx->x[0] & 0xff);
 		}
+		else if (task_thread_killed(thread_self())) {
+			/* Its task is being torn down: no new call, just leave. */
+			aarch64_el0_return_check(ctx);
+		}
 		else {
 			ctx->x[0] = (uint64_t)aarch64_syscall_dispatch(ctx);
+			/* The call may have been ended by the teardown (-EINTR). */
+			aarch64_el0_return_check(ctx);
 		}
 		return;
 

@@ -97,6 +97,10 @@ static void task_mmap_deinit(const struct task *task) {
 	}
 
 	vmem_free_context(mmap_self->ctx);
+	/* Not left pointing at the freed root: anything that still asks this
+	 * task for its context (a user copy, a switch back to one of its
+	 * threads) gets the kernel's, which is mapped for good. */
+	mmap_self->ctx = mmap_kernel->ctx;
 }
 
 static size_t task_mmap_offset;
