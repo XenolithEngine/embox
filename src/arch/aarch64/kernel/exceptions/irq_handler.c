@@ -94,4 +94,8 @@ void aarch64_irq_handler(struct excpt_context *ctx) {
 	irqctrl_enable(irq);
 	critical_leave(CRITICAL_IRQ_HANDLER);
 	critical_dispatch_pending();
+
+	/* Last, after any switch this interrupt caused has come back: a thread of
+	 * a task being torn down leaves here instead of returning to EL0. */
+	aarch64_el0_return_check(ctx);
 }

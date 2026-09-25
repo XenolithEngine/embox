@@ -13,6 +13,7 @@
 
 #include <kernel/sched/current.h>
 
+#include <kernel/task.h>
 #include <kernel/thread.h>
 
 #include <kernel/thread/thread_wait.h>
@@ -22,6 +23,12 @@ static int sched_intr(int res) {
 	struct sigstate *sigst = &t->sigstate;
 	int sig;
 	siginfo_t sinfo;
+
+	/* A thread whose task is being torn down: whatever it waits for will not
+	 * come, and task_do_exit() is waiting for it to leave. */
+	if (task_thread_killed(t)) {
+		return -EINTR;
+	}
 
 	/*if (t->sigaction) {*/
 	if ((sig = sigstate_receive(sigst, &sinfo))) {

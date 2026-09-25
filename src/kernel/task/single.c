@@ -27,6 +27,11 @@ void task_init(struct task *tsk, int id, struct task *parent,
 	task_resource_init(tsk);
 }
 
+int task_thread_killed(struct thread *t) {
+	(void)t;
+	return 0;
+}
+
 void task_do_exit(struct task *task, int status) {
 	panic("single task %s called\n", __func__);
 }

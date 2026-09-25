@@ -19,4 +19,8 @@ struct excpt_context {
 
 extern void aarch64_print_excpt_context(struct excpt_context *ctx);
 
+/* Divert a thread of a task being torn down to its exit instead of EL0
+ * (sync_handler.c). */
+extern void aarch64_el0_return_check(struct excpt_context *ctx);
+
 #endif /* ARCH_AARCH64_KERNEL_EXCEPTIONS_EXCEPTION_H_ */

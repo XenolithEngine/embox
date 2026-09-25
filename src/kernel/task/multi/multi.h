@@ -29,6 +29,10 @@ struct task {
 	 * "somebody is already exiting this task" -- see task_do_exit(). This is
 	 * that latch, and only that. */
 	int tsk_exiting;
+	/* The thread tearing the task down, set with the latch. Every other thread
+	 * of an exiting task is killed: its waits end with -EINTR and it leaves
+	 * the next time it would go back to EL0 (task_thread_killed()). */
+	struct thread *tsk_exiter;
 	int tsk_id;
 
 	struct task *parent;

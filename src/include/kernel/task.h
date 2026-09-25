@@ -77,6 +77,14 @@ extern void task_start_exit(void);
  */
 extern void task_do_exit(struct task *task, int status);
 
+/**
+ * Whether @p t belongs to a task that is being torn down by another of its
+ * threads. Such a thread is killed: a wait it is in ends with -EINTR
+ * (sched_intr()), and it leaves at the next point where it would return to
+ * user mode. task_do_exit() waits for all of them before freeing anything.
+ */
+extern int task_thread_killed(struct thread *t);
+
 extern void task_finish_exit(void);
 
 /**
