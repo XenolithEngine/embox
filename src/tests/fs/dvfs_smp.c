@@ -530,6 +530,126 @@ TEST_CASE("open on one thread, close on another: every reference comes back") {
 }
 
 /* ------------------------------------------------------------------ *
+ * fcntl(2) record locks belong to the task. Another task is refused, sees
+ * who holds the range, waits in F_SETLKW, and gets it when the holder closes
+ * any descriptor of the file -- not the one it locked through -- and what a
+ * task still holds goes when it ends. Before these existed every lock command
+ * reached the file's ioctl and came back EINVAL.
+ */
+#define RL_FILE FS_DIR "/rl.bin"
+
+static volatile int rl_stage;   /* how far the other task has got */
+static volatile int rl_holder;  /* the pid the other task should see */
+
+static int rl_lock(int fd, int cmd, short type, off_t start, off_t len) {
+	struct flock fl = {
+	    .l_type = type,
+	    .l_whence = SEEK_SET,
+	    .l_start = start,
+	    .l_len = len,
+	};
+
+	return fcntl(fd, cmd, &fl);
+}
+
+static void *rl_task(void *arg) {
+	struct flock fl = {
+	    .l_type = F_WRLCK,
+	    .l_whence = SEEK_SET,
+	    .l_start = 4,
+	    .l_len = 4,
+	};
+	int fd;
+
+	fd = open(RL_FILE, O_RDWR);
+	if (fd < 0) {
+		return (void *) 1;
+	}
+
+	/* The holder's write lock on [0, 16) refuses a write lock and a read
+	 * lock inside it, and nothing outside it. */
+	if (rl_lock(fd, F_SETLK, F_WRLCK, 0, 16) != -1 || errno != EAGAIN) {
+		return (void *) 2;
+	}
+	if (rl_lock(fd, F_SETLK, F_RDLCK, 8, 16) != -1 || errno != EAGAIN) {
+		return (void *) 3;
+	}
+	if (rl_lock(fd, F_SETLK, F_WRLCK, 32, 16) != 0) {
+		return (void *) 4;
+	}
+
+	if (fcntl(fd, F_GETLK, &fl) != 0 || fl.l_type != F_WRLCK
+	    || fl.l_start != 0 || fl.l_len != 16 || fl.l_pid != rl_holder) {
+		return (void *) 5;
+	}
+
+	/* Wait for the range; the holder lets go by closing another descriptor. */
+	rl_stage = 1;
+	if (rl_lock(fd, F_SETLKW, F_WRLCK, 0, 16) != 0) {
+		return (void *) 6;
+	}
+	rl_stage = 2;
+
+	/* Leaves holding [0, 16) and [32, 48): the task's end drops both. */
+	while (rl_stage != 3) {
+		usleep(1000);
+	}
+	return NULL;
+}
+
+TEST_CASE("record locks: refused, reported, waited for, dropped at close and at exit") {
+	static const char data[64] = "record locks";
+	int fd, fd2;
+	pid_t pid;
+	int i;
+
+	test_assert_zero(file_make(RL_FILE, data, sizeof(data)));
+	test_assert((fd = open(RL_FILE, O_RDWR)) >= 0);
+	test_assert((fd2 = open(RL_FILE, O_RDONLY)) >= 0);
+
+	test_assert_zero(rl_lock(fd, F_SETLK, F_WRLCK, 0, 16));
+	/* One task never conflicts with itself: a lock over its own replaces it */
+	test_assert_zero(rl_lock(fd2, F_SETLK, F_RDLCK, 0, 4));
+	test_assert_zero(rl_lock(fd, F_SETLK, F_WRLCK, 0, 16));
+	/* A read-only descriptor cannot take a write lock */
+	test_assert_equal(-1, rl_lock(fd2, F_SETLK, F_WRLCK, 100, 1));
+	test_assert_equal(EBADF, errno);
+
+	rl_stage = 0;
+	rl_holder = task_get_id(task_self());
+	pid = new_task("dvfs_rl", rl_task, NULL);
+	test_assert(pid >= 0);
+
+	for (i = 0; i < 5000 && rl_stage == 0; i++) {
+		usleep(1000);
+	}
+	test_assert_equal(1, rl_stage);
+	/* Still waiting, and not for lack of a chance to run */
+	usleep(50 * 1000);
+	test_assert_equal(1, rl_stage);
+
+	/* Any descriptor of the file: fd2 never locked [0, 16) itself */
+	test_assert_zero(close(fd2));
+	for (i = 0; i < 5000 && rl_stage == 1; i++) {
+		usleep(1000);
+	}
+	test_assert_equal(2, rl_stage);
+
+	/* The other task has it now */
+	test_assert_equal(-1, rl_lock(fd, F_SETLK, F_WRLCK, 0, 1));
+	test_assert_equal(EAGAIN, errno);
+
+	rl_stage = 3;
+	test_assert_zero(task_waitpid(pid));
+
+	/* Its end took all it held */
+	test_assert_zero(rl_lock(fd, F_SETLK, F_WRLCK, 0, 0));
+	test_assert_zero(rl_lock(fd, F_SETLK, F_UNLCK, 0, 0));
+	test_assert_zero(close(fd));
+	test_assert_zero(unlink(RL_FILE));
+}
+
+/* ------------------------------------------------------------------ *
  * A task's working directory holds what it names. Umount must say EBUSY
  * while a task stands in the volume, and must work once it has gone -- the
  * working directory used to hold nothing, and was never let go either.
