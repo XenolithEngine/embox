@@ -24,6 +24,10 @@ static char lvl1_raw[(1024) * MMU_SIZE(1)] __attribute__ ((aligned(MMU_SIZE(1)))
 PAGE_ALLOCATOR_DEF(lvl0_allocator, lvl0_raw, 1024, MMU_SIZE(0));
 PAGE_ALLOCATOR_DEF(lvl1_allocator, lvl1_raw, 1024, MMU_SIZE(1));
 
+long vmem_tables_free(void) {
+	return (long)(lvl0_allocator.free / MMU_SIZE(0) + lvl1_allocator.free / MMU_SIZE(1));
+}
+
 uintptr_t *vmem_alloc_table(int lvl) {
 	void *addr = 0;
 

@@ -14,4 +14,8 @@
 extern uintptr_t *vmem_alloc_table(int lvl);
 extern void vmem_free_table(int lvl, uintptr_t *table);
 
+/* Translation tables the allocator still has to give, or -1 if it cannot
+ * tell. A count that falls from one program to the next is a leak. */
+extern long vmem_tables_free(void);
+
 #endif /* VMEM_ALLOC_H_ */

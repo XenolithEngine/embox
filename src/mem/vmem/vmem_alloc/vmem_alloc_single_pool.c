@@ -32,3 +32,7 @@ uintptr_t *vmem_alloc_table(int lvl) {
 void vmem_free_table(int lvl, uintptr_t *table) {
 	page_free(&mmu_tables_allocator, table, 1);
 }
+
+long vmem_tables_free(void) {
+	return (long)(mmu_tables_allocator.free / MMU_PAGE_SIZE);
+}

@@ -31,3 +31,7 @@ void vmem_free_table(int lvl, uintptr_t *table) {
 	(void )lvl;
 	phymem_free(table, 1);
 }
+
+long vmem_tables_free(void) {
+	return -1; /* from the page allocator at large: no count of its own */
+}
