@@ -4,6 +4,7 @@
  * @date Dec 12, 2019
  * @author Anton Bondarev
  */
+#include <errno.h>
 #include <stddef.h>
 #include <fcntl.h>
 
@@ -67,6 +68,20 @@ static size_t fat_write_unlocked(struct file_desc *desc, void *buf,
 	if (fi == NULL) {
 		return 0;   /* see the note in fat_read */
 	}
+	/* A write past the end, after an lseek beyond it: the gap must read as
+	 * zeros. The loop in fat_write_file() only ever continues a file -- it
+	 * takes the cluster from the cursor and the sector from the offset -- so
+	 * the file is grown to old_pos first, the way ftruncate grows it (zeros,
+	 * in clusters allocated for them), and the write then continues it.
+	 * Without this the gap held whatever the cluster held before, another
+	 * file's bytes; a write into an empty file landed in its first cluster at
+	 * any offset; and one past the allocated chain was lost. */
+	if ((uint32_t)old_pos > fi->filelen) {
+		if (fat_truncate_file(fi, (uint32_t)old_pos) != 0) {
+			return (size_t)-ENOSPC;
+		}
+		file_set_size(desc, old_pos);
+	}
 	/* Same cursor, same reason -- see fat_read above. */
 	if ((size_t)old_pos != fi->pointer && fi->firstcluster >= 2) {
 		if (fat_seek_cluster(fi, fat_sector_buff, old_pos) != DFS_OK) {
@@ -80,16 +95,23 @@ static size_t fat_write_unlocked(struct file_desc *desc, void *buf,
 	rezult = fat_write_file(fi, fat_sector_buff, (uint8_t *)buf,
 			&bytecount, size, &new_sz);
 
-	if (DFS_OK == rezult || DFS_EOF == rezult) {
+	/* What was written counts even when the write stopped short -- a volume
+	 * that filled up part way. Only a write that stored nothing is an error,
+	 * and it is one, not 0: write() returning 0 says "nothing written, try
+	 * again", and a caller that does -- musl's stdio loops until the buffer
+	 * is out -- spins for ever on a full volume. That is what a printf into
+	 * a file on a full /tmp did. POSIX: -1 and ENOSPC. */
+	if (bytecount > 0) {
 		if (old_pos + bytecount > file_get_size(desc)) {
 			file_set_size(desc, old_pos + bytecount);
 			fi->filelen = old_pos + bytecount;
 		}
-
 		return bytecount;
 	}
-
-	return 0;
+	if (DFS_OK == rezult || DFS_EOF == rezult || size == 0) {
+		return 0;
+	}
+	return (size_t)-ENOSPC;
 }
 
 /* An operation on a file whose inode has no private data left.

@@ -902,10 +902,16 @@ static uint32_t fat_set_fat(struct fat_fs_info *fsi, uint8_t *p_scratch,
 					if (cluster & 1) {
 						p_scratch[0] = (new_contents & 0xff00) >> 8;
 					}
-					/* Even cluster: Low 12 bits being set */
+					/* Even cluster: Low 12 bits being set, and what goes
+					 * into this byte is their top nibble, bits 8-11 -- it
+					 * was bits 0-3, so an even cluster whose entry
+					 * straddles two FAT sectors (682, 1706... with
+					 * 512-byte sectors) linked to the wrong cluster: a
+					 * file read back ended there, 1.3 MiB into an 8 MiB
+					 * volume of 2 KiB clusters. */
 					else {
 						p_scratch[0] = (p_scratch[0] & 0xf0) |
-								(new_contents & 0x0f);
+								((new_contents & 0x0f00) >> 8);
 					}
 					result = fat_write_sector(fsi, p_scratch, sector);
 					/* mirror the FAT into copy 2 */
