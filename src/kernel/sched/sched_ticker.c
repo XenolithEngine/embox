@@ -40,6 +40,8 @@ static void sched_tick(sys_timer_t *timer, void *param) {
 		if (!cpu_get_idle(i)) {
 			continue;
 		}
+		/* The slice ends on that core too, not only on this one */
+		sched_yield_request_cpu(i);
 		smp_send_resched(i);
 	}
 #endif /* SMP */
