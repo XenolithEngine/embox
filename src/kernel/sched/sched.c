@@ -96,19 +96,38 @@ static int rq_nr_ready;
 static unsigned int resched_sent __cpudata__;
 #endif /* SMP */
 
+/* A request to give the CPU to the next thread of the same priority: a tick
+ * or sched_yield(). One per core. It used to be one word for the whole system,
+ * and on several cores whichever core reached __schedule() first took it: a
+ * tick made one core of four change threads, and a thread's own yield() was
+ * taken by another core as often as not, so it kept running. libc++'s
+ * atomic<float> tests -- eight threads spinning on yield() while main has the
+ * one store they wait for -- ran for over five minutes on four cores (A1). */
+#ifdef SMP
+static int sched_yield_req __cpudata__;
+#define SCHED_YIELD_REQ cpudata_var(sched_yield_req)
+#else
 static int sched_yield_req;
+#define SCHED_YIELD_REQ sched_yield_req
+#endif
 
 static inline int sched_yield_requested(void) {
-	return sched_yield_req;
+	return SCHED_YIELD_REQ;
 }
 
 static inline void sched_yield_request(void) {
-	sched_yield_req = 1;
+	SCHED_YIELD_REQ = 1;
 }
 
 static inline void sched_yield_ack(void) {
-	sched_yield_req = 0;
+	SCHED_YIELD_REQ = 0;
 }
+
+#ifdef SMP
+void sched_yield_request_cpu(int cpu_id) {
+	cpudata_cpu_var(cpu_id, sched_yield_req) = 1;
+}
+#endif
 
 void sched_post_switch(void) {
 	sched_yield_request();

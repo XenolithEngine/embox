@@ -195,6 +195,9 @@ extern void sched_freeze(struct schedee *t);
  * Requests switching of the current schedee.
  */
 extern void sched_post_switch(void);
+/* SMP: the next __schedule() on CPU_ID moves on to the next thread of the same
+ * priority, as sched_post_switch() asks of the current core. */
+extern void sched_yield_request_cpu(int cpu_id);
 
 /**
  * Runs the scheduler right now.
