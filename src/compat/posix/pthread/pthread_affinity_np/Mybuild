@@ -3,3 +3,11 @@ package embox.compat.posix.pthread
 static module pthreads_affinity_np_stubs {
 	source "pthread_affinity_np_stub.c"
 }
+
+/* The real ones: pthread_setaffinity_np() pins the thread through
+ * schedee.affinity (thread_set_affinity()), for a system with SMP. */
+static module pthreads_affinity_np {
+	source "pthread_affinity_np.c"
+
+	depends embox.kernel.cpu.common
+}
