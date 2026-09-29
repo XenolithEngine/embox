@@ -20,26 +20,27 @@
 
 #include <util/math.h>
 
-static void sighandler_default(int sig) {
-	task_exit(NULL);
-}
-
 static void sighandler_ignore(int sig) {
 	/* do nothing */
 }
 
+/* SIG_DFL is the handler the task started with for this signal
+ * (task_resource_sig_default()), not one "terminate" for every signal: the
+ * default of SIGCHLD, SIGURG and SIGWINCH is to ignore. And it has to be
+ * recognised on the way out, or signal() on a fresh task answers with a
+ * kernel function pointer where POSIX says SIG_DFL. */
 int sigaction(int sig, const struct sigaction *restrict act,
 		struct sigaction *restrict oact) {
 	struct sigaction *sig_table = task_self_resource_sig_table();
 
-	if (!check_range(sig, 0, _SIG_TOTAL) || IS_UNMODIFIABLE_SIGNAL(sig))
+	if (!check_range(sig, 1, _SIG_TOTAL) || IS_UNMODIFIABLE_SIGNAL(sig))
 		return SET_ERRNO(EINVAL);
 
 	if (oact) {
 		sighandler_t ofunc = sig_table[sig].sa_handler;
 		memcpy(oact, &sig_table[sig], sizeof(struct sigaction));
 
-		if (ofunc == sighandler_default) {
+		if (ofunc == task_resource_sig_default(sig)) {
 			ofunc = SIG_DFL;
 		} else if (ofunc == sighandler_ignore) {
 			ofunc = SIG_IGN;
@@ -53,7 +54,7 @@ int sigaction(int sig, const struct sigaction *restrict act,
 		memcpy(&sig_table[sig], act, sizeof(struct sigaction));
 
 		if (func == SIG_DFL) {
-			func = sighandler_default;
+			func = task_resource_sig_default(sig);
 		} else if (func == SIG_IGN || func == SIG_ERR) {
 			func = sighandler_ignore;
 		}
@@ -79,9 +80,26 @@ sighandler_t signal(int sig, sighandler_t func) {
 	return oact.sa_handler;
 }
 
+/* 0 or a negative error number. The callers below had passed that negative
+ * number to SET_ERRNO(), so a bad signal left errno at -EINVAL. */
+static int thread_signal(struct thread *thread, int sig,
+		const siginfo_t *info) {
+	int err;
+
+	err = sigstate_send(&thread->sigstate, sig, info);
+	if (err) {
+		return err;
+	}
+
+	if (sig != 0) {
+		sched_signal(&thread->schedee);
+	}
+
+	return 0;
+}
+
 int sigqueue(int tid, int sig, const union sigval value) {
 	struct task *task;
-	struct sigstate *sigstate;
 	siginfo_t info;
 	int err;
 
@@ -89,60 +107,64 @@ int sigqueue(int tid, int sig, const union sigval value) {
 	if (!task)
 		return SET_ERRNO(ESRCH);
 
-	sigstate = &task_get_main(task)->sigstate;
-
 	// TODO prepare it
 	info.si_value = value;
 
-	err = sigstate_send(sigstate, sig, &info);
+	err = thread_signal(task_get_main(task), sig, &info);
 	if (err)
-		return SET_ERRNO(err);
-
-	sched_signal(&task_get_main(task)->schedee);
+		return SET_ERRNO(-err);
 
 	return 0;
 }
 
-
+/* POSIX: the error number is the return value; errno is left alone. */
 int pthread_kill(pthread_t thread, int sig) {
-	struct sigstate *sigstate;
-	int err;
-
 	assert(thread);
 
-	sigstate = &thread->sigstate;
-	err = sigstate_send(sigstate, sig, NULL);
-	if (err)
-		return SET_ERRNO(err);
-
-	sched_signal(&thread->schedee);
-
-	return 0;
+	return -thread_signal(thread, sig, NULL);
 }
 
 int kill(int tid, int sig) {
 	struct task *task;
+	int err;
 
-	if (sig == 0) {
-		/* If sig is 0 (the null signal), error checking is performed
-		 but no signal is actually sent. The null signal can be used to
-		  check the validity of pid. */
-		return 0;
+	if (!check_range(sig, 0, _SIG_TOTAL)) {
+		return SET_ERRNO(EINVAL);
 	}
 
-	if (tid <= 0) {
-		/* process group is the target, NYI */
-		return -ENOSYS;
+	if (tid == 0) {
+		/* The caller's process group. A task is its own group here. */
+		task = task_self();
+	}
+	else if (tid == -1) {
+		/* Every process the caller may signal, NYI */
+		return SET_ERRNO(ENOSYS);
+	}
+	else {
+		/* -pgid names the group led by that task, which is the task. */
+		task = task_table_get(tid < 0 ? -tid : tid);
 	}
 
-	task = task_table_get(tid);
 	if (!task) {
 		return SET_ERRNO(ESRCH);
 	}
-	
-	return pthread_kill(task_get_main(task), sig);
+
+	/* With the null signal the checks above are the whole call. */
+	err = thread_signal(task_get_main(task), sig, NULL);
+	if (err) {
+		return SET_ERRNO(-err);
+	}
+
+	return 0;
 }
 
 int raise(int signo) {
-	return pthread_kill(thread_self(), signo);
+	int err;
+
+	err = thread_signal(thread_self(), signo, NULL);
+	if (err) {
+		return SET_ERRNO(-err);
+	}
+
+	return 0;
 }

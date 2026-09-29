@@ -39,9 +39,13 @@ int task_table_add(struct task *tsk) {
 	return IDX2TID(idx);
 }
 
+/* The tid comes from the caller -- kill(), sigqueue(), a command line -- so
+ * one that names no task is an answer (NULL), not an assertion. */
 struct task *task_table_get(int tid) {
 	int idx = TID2IDX(tid);
-	assert(IDXCHK(idx));
+	if (!IDXCHK(idx)) {
+		return NULL;
+	}
 	return bitmap_test_bit(task_table_bm, idx) ? task_table[idx] : NULL;
 }
 

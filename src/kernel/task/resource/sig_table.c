@@ -120,11 +120,7 @@ static void task_sig_table_init(const struct task *task,
 	for (sig = 0; sig < _SIG_TOTAL; ++sig) {
 		sig_table[sig].sa_flags = 0;
 		memset(&sig_table[sig].sa_mask, 0, sizeof sig_table[sig].sa_mask);
-		if (sig < ARRAY_SIZE(default_sig_action)) {
-			sig_table[sig].sa_handler = default_sig_action[sig];
-		} else {
-			sig_table[sig].sa_handler = task_sig_handler_ignore;
-		}
+		sig_table[sig].sa_handler = task_resource_sig_default(sig);
 	}
 }
 
@@ -135,6 +131,14 @@ static const struct task_resource_desc task_sig_table_desc = {
 	.resource_size = sizeof(struct sigaction) * _SIG_TOTAL,
 	.resource_offset = &task_sig_table_offset
 };
+
+task_sig_handler_t task_resource_sig_default(int sig) {
+	if (sig > 0 && sig < ARRAY_SIZE(default_sig_action)
+	    && default_sig_action[sig] != NULL) {
+		return default_sig_action[sig];
+	}
+	return task_sig_handler_ignore;
+}
 
 struct sigaction * task_resource_sig_table(const struct task *task) {
 	assert(task != NULL);
