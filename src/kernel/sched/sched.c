@@ -194,6 +194,57 @@ void sched_set_current(struct schedee *schedee) {
 
 #ifdef SMP
 /**
+ * Make sure one of the busy CPUs in `mask` will end its slice.
+ *
+ * A busy core is preempted by the scheduler tick, and a core is on the tick
+ * only while its own last trip through the scheduler found an equal-priority
+ * rival in the queue. A thread running alone therefore has no tick, and a
+ * schedee that may run only where it runs waits forever: the core that queued
+ * it cannot take it, and nothing brings the busy one back to the queue. That
+ * is what a thread pinned next to a spinning one did (BF-44).
+ *
+ * So when no core of `mask` is on the tick, one busy core of it is sent a
+ * resched: its __schedule() keeps what it runs -- no yield was asked -- but
+ * sched_ticker_update() then sees the rival and puts the core on the tick, and
+ * the next tick hands the slice over as it would have to any other rival.
+ * Idle cores are the callers' business and are skipped here.
+ */
+static void sched_poke_busy(unsigned int mask) {
+	extern void smp_send_resched(int cpu_id);
+	struct sys_timer *tick;
+	struct thread *idle;
+	unsigned int self;
+	int cpuid;
+
+	tick = sched_ticker_get_timer();
+	/* Not shared yet: the secondaries have not been started. */
+	if (!tick->timer_sharing) {
+		return;
+	}
+	if (atomic_rmw_load(&tick->timer_sharing->shared_cpu, __ATOMIC_RELAXED)
+	        & mask) {
+		return;
+	}
+
+	self = cpu_get_id();
+	for (cpuid = 0; cpuid < NCPU; cpuid++) {
+		if ((cpuid == (int)self) || !(mask & (1u << cpuid))) {
+			continue;
+		}
+		idle = cpu_get_idle(cpuid);
+		if (!idle || idle->schedee.active) {
+			continue;
+		}
+		if (cpudata_cpu_var(cpuid, resched_sent)) {
+			return;
+		}
+		cpudata_cpu_var(cpuid, resched_sent) = 1;
+		smp_send_resched(cpuid);
+		return;
+	}
+}
+
+/**
  * Wake the CPUs a newly-ready schedee may run on.
  *
  * The run queue is shared, so any CPU that reaches the scheduler will find
@@ -202,8 +253,9 @@ void sched_set_current(struct schedee *schedee) {
  * is nothing left to bring it back. A thread pinned to such a core simply
  * never starts.
  *
- * Only idle CPUs are poked -- a busy one gets there on its own at the next
- * preemption -- and never the caller's own.
+ * Idle CPUs are poked first, and never the caller's own. A busy one gets there
+ * on its own at the next tick only if it is on the tick, which is what
+ * sched_poke_busy() sees to when no idle core may take the schedee.
  *
  * `taken_here` is what sched_check_preempt() just decided about this CPU, and
  * it is what turns "may this CPU run it" into "is there more ready work than
@@ -252,6 +304,10 @@ static void sched_wakeup_remote(struct schedee *s, int taken_here) {
 		/* One schedee, one core. */
 		smp_send_resched(cpuid);
 		return;
+	}
+
+	if (!(mask & (1u << self))) {
+		sched_poke_busy(mask);
 	}
 }
 #endif /* SMP */
@@ -673,6 +729,8 @@ static void sched_ticker_update(void) {
 			unsigned int mask;
 			int cpuid;
 
+			int sent = 0;
+
 			/* Bounded by NCPU, not by the mask: an unbound schedee carries
 			 * SCHEDEE_AFFINITY_NONE = ~0, and cpu_get_idle() past NCPU
 			 * indexes past the cpudata section. */
@@ -691,7 +749,13 @@ static void sched_ticker_update(void) {
 				/* check target cpu is on idle thread for safety */
 				cpu_get_idle(cpuid)->schedee.active == 0x1) {
 				   smp_send_resched(cpuid);
+				   sent = 1;
 				}
+			}
+			/* None of its cores is idle: one of them is busy with a thread
+			 * that may never give the slice up. */
+			if (!sent) {
+				sched_poke_busy(wake_mask);
 			}
 		}
 		sched_ticker_del();
@@ -776,8 +840,13 @@ static void __schedule(int preempt) {
 		next = runq_get_next(&rq.queue);
 		assert(next);
 
+		/* Keeping prev is only an option on a core prev may run on: it was
+		 * not checked, and a thread whose mask had just been narrowed
+		 * (pthread_setaffinity_np) stayed on the core it had been told to
+		 * leave for as long as an equal-priority thread was queued (BF-44). */
 		if (schedee_is_thread(prev) && schedee_is_thread(next) &&
-			    schedee_priority_get(prev) == schedee_priority_get(next)) {
+			    schedee_priority_get(prev) == schedee_priority_get(next) &&
+			    sched_affinity_check(&prev->affinity, 1 << cpu_get_id())) {
 			if (yield_requested) {
 				/* Clear ticker request and continue with 'next' thread. */
 				sched_yield_ack();

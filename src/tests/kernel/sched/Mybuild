@@ -20,3 +20,12 @@ module runq_smp {
 	depends embox.kernel.timer.sleep
 	depends embox.framework.test
 }
+
+module affinity_pin {
+	source "affinity_pin.c"
+
+	depends embox.compat.posix.pthreads
+	depends embox.compat.posix.pthread.pthreads_affinity_np
+	depends embox.compat.posix.sched.sched
+	depends embox.framework.test
+}
