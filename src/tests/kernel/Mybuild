@@ -51,6 +51,13 @@ module spinlock_test {
 	source "spinlock_test.c"
 }
 
+module clock_resolution {
+	source "clock_resolution.c"
+
+	depends embox.compat.posix.util.sleep
+	depends embox.framework.LibFramework
+}
+
 module sleep_smp {
 	source "sleep_smp.c"
 
