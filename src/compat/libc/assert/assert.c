@@ -13,6 +13,9 @@
 #include <kernel/panic.h>
 #include <kernel/printk.h>
 #include <kernel/spinlock.h>
+#include <kernel/task.h>
+#include <kernel/thread.h>
+#include <stdint.h>
 
 #include "assert_impl.h"
 
@@ -38,6 +41,35 @@ static const char oops_banner[] =
 
 static void print_oops(void) {
 	printk("\n%s", oops_banner);
+}
+#endif
+
+#if defined(__aarch64__)
+/* Who called the function that failed: whereami() has no aarch64 support,
+ * and an assertion that names the line but not the path to it is half a
+ * report -- BF-59's said "sched_unlock() without the BKL" twice and not from
+ * where. The frame-pointer chain of this CPU: [fp] is the caller's fp,
+ * [fp + 8] the return address. Bounded, and only while fp climbs. */
+static void assert_backtrace(void) {
+	uintptr_t fp = (uintptr_t)__builtin_frame_address(0);
+	struct thread *t = thread_self();
+	int n;
+
+	printk("\tthread %d (%s), called from:", t ? t->id : -1,
+	    t && t->task ? task_get_name(t->task) : "-");
+	for (n = 0; n < 16 && fp && !(fp & 7); n++) {
+		uintptr_t next = ((uintptr_t *)fp)[0];
+
+		printk(" %#lx", (unsigned long)((uintptr_t *)fp)[1]);
+		if (next <= fp || next - fp > 0x100000) {
+			break;
+		}
+		fp = next;
+	}
+	printk("\n");
+}
+#else
+static inline void assert_backtrace(void) {
 }
 #endif
 
@@ -68,6 +100,7 @@ void __assertion_handle_failure(const struct __assertion_point *point) {
 		printk("\n\t(%s)\n", __assertion_message_buff);
 
 	whereami();
+	assert_backtrace();
 
 #ifdef SMP
 	if (smp_print_stopped) {
