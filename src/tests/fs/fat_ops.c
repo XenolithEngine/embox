@@ -39,6 +39,7 @@
 #include <string.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <ctype.h>
@@ -988,6 +989,47 @@ TEST_CASE("what was written survives a remount") {
 
 	pattern_fill(pattern, DATA_SZ, 10);
 	test_assert_equal(-1, check_file(FILE_A, DATA_SZ, 4096));
+}
+
+/* The time lives in the directory entry, in two-second steps, and stat() reads
+ * it from there: before, utime() kept it in the inode only, the entry was never
+ * read, and stat() of a file on FAT said 1970 after any remount. */
+TEST_CASE("a modification time set with utimensat survives a remount, to two seconds") {
+	const char *dir = FS_DIR "/mtime_d";
+	struct timespec ts[2] = {{1000000000, 0}, {1234567891, 0}};
+	struct stat st;
+
+	test_assert_zero(write_file(FILE_A, 100, 11));
+	mkdir(dir, 0777);
+
+	/* A write stamps the entry; with no RTC the clock is before 1980, and
+	 * FAT says its epoch, 1980-01-01. */
+	test_assert_zero(stat(FILE_A, &st));
+	test_assert(st.st_mtime >= 315532800);
+
+	test_assert_zero(utimensat(AT_FDCWD, FILE_A, ts, 0));
+	test_assert_zero(utimensat(AT_FDCWD, dir, ts, 0));
+	test_assert_zero(stat(FILE_A, &st));
+	test_assert_equal(1234567890, (long)st.st_mtime);
+
+	test_assert_zero(umount(FS_DIR));
+	test_assert_zero(mount(FS_DEV, FS_DIR, FS_NAME, 0, NULL));
+
+	test_assert_zero(stat(FILE_A, &st));
+	test_assert_equal(1234567890, (long)st.st_mtime);
+	test_assert_zero(stat(dir, &st));
+	test_assert_equal(1234567890, (long)st.st_mtime);
+
+	/* UTIME_OMIT leaves it; a missing file is ENOENT. */
+	ts[1].tv_nsec = UTIME_OMIT;
+	test_assert_zero(utimensat(AT_FDCWD, FILE_A, ts, 0));
+	test_assert_zero(stat(FILE_A, &st));
+	test_assert_equal(1234567890, (long)st.st_mtime);
+	test_assert_equal(-1, utimensat(AT_FDCWD, FS_DIR "/missing", NULL, 0));
+	test_assert_equal(ENOENT, errno);
+
+	rmdir(dir);
+	remove(FILE_A);
 }
 
 /* A FAT12 entry is a byte and a half, so some straddle two FAT sectors: with

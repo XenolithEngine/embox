@@ -9,3 +9,9 @@ module utimensat_stub extends utimensat {
 
 	source "utimensat_stub.c"
 }
+/* utimensat() over utime(), for a system that has a file system. */
+module utimensat_utime extends utimensat {
+	source "utimensat_utime.c"
+
+	depends embox.compat.posix.file_system
+}

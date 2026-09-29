@@ -9,3 +9,9 @@ module utimes_stub extends utimes {
 
 	source "utimes_stub.c"
 }
+/* utimes() over utime(), for a system that has a file system. */
+module utimes_utime extends utimes {
+	source "utimes_utime.c"
+
+	depends embox.compat.posix.file_system
+}

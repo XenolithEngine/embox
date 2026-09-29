@@ -7,6 +7,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <time.h>
 #include <stddef.h>
 
 #include <drivers/block_dev.h> /* block_dev_block_size */
@@ -93,6 +94,9 @@ int kwrite(struct file_desc *desc, char *buf, int count) {
 		    && desc->f_pos > (off_t) inode->i_size) {
 			inode->i_size = desc->f_pos;
 		}
+		/* A write modifies the file; stat() reads this. A driver that keeps
+		 * times on the medium (FAT) has stamped its own copy already. */
+		inode->i_mtime = time(NULL);
 	}
 
 	/* What the driver wrote, not what was asked: a short or failed write
