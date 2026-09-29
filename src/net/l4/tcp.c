@@ -173,17 +173,29 @@ int alloc_prep_skb(struct tcp_sock *tcp_sk, size_t opt_len,
 	return 0;
 }
 
+/* The scheduler lock first, always, and the socket's count under it.
+ *
+ * It was the other way round -- the count, then sched_lock() only for the
+ * first holder -- which is a recursion count per socket rather than per
+ * holder, and not atomic. On more than one core two holders of one socket
+ * interleave: the TCP input or the retransmit timer takes it (0 -> 1, and
+ * the BKL), a sending thread on another core sees 1, counts 2 and goes on
+ * without the lock; the first unlocks to 1 and keeps the BKL; the sender
+ * unlocks to 0 and releases a scheduler lock its core never took. That is
+ * BF-59: `bkl_owner == cpu_get_id()` in sched_unlock() from tcp_sock_unlock(),
+ * a critical count of 0 and the BKL on another core, three times -- each in
+ * xlctl's send right after a 25 MB download, when ACKs for its socket arrive
+ * on other cores as fast as it writes. sched_lock() nests by itself, so
+ * taking it every time costs a counter increment. */
 void tcp_sock_lock(struct tcp_sock *tcp_sk, unsigned int obj) {
-	if (tcp_sk->lock++ == 0) {
-		sched_lock();
-	}
+	sched_lock();
+	tcp_sk->lock++;
 }
 
 void tcp_sock_unlock(struct tcp_sock *tcp_sk, unsigned int obj) {
 	assert(tcp_sk->lock != 0);
-	if (--tcp_sk->lock == 0) {
-		sched_unlock();
-	}
+	tcp_sk->lock--;
+	sched_unlock();
 }
 
 void tcp_seq_state_set_wind_value(struct tcp_seq_state *tcp_seq_st,
