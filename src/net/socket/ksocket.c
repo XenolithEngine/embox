@@ -294,6 +294,11 @@ int ksendmsg(struct sock *sk, struct msghdr *msg, int flags) {
 	assert(sk->f_ops);
 	assert(sk->f_ops->sendmsg);
 
+	/* After shutdown(SHUT_WR) or SHUT_RDWR. */
+	if (sk->shutdown_flag & (SHUT_WR + 1)) {
+		return -EPIPE;
+	}
+
 	switch (sk->opt.so_type) {
 	default:
 		if (!sock_state_bound(sk)) {
@@ -509,6 +514,9 @@ int kgetsockopt(struct sock *sk, int level, int optname,
 			}
 		}
 
+		/* The protocol has answered: OPTNAME belongs to its level, and
+		 * reading it as a SOL_SOCKET option would be wrong. */
+		return ret;
 	}
 
 	switch (optname) {
