@@ -461,6 +461,16 @@ static int inet_getsockopt(struct sock *sk, int level,
 	}
 
 	switch (optname) {
+	case IP_TTL: {
+		int ttl = to_inet_sock(sk)->uc_ttl > 0 ? to_inet_sock(sk)->uc_ttl : 64;
+
+		if (*optlen < sizeof(int)) {
+			return -EINVAL;
+		}
+		memcpy(optval, &ttl, sizeof(int));
+		*optlen = sizeof(int);
+		break;
+	}
 	default:
 		return -ENOPROTOOPT;
 	}
@@ -490,6 +500,7 @@ static int inet_setsockopt(struct sock *sk, int level,
 
 	switch (optname) {
 	case IP_HDRINCL:
+	case IP_TTL:
 		if (optlen <= 0 || optlen > sizeof(int)) {
 			return -EFAULT;
 		}
@@ -506,6 +517,16 @@ static int inet_setsockopt(struct sock *sk, int level,
 		break;
 	case IP_TOS:
 		break;
+	case IP_TTL:
+		/* -1 is the default back, as on Linux. */
+		if (val == -1) {
+			inet->uc_ttl = -1;
+		} else if (val < 1 || val > 255) {
+			return -EINVAL;
+		} else {
+			inet->uc_ttl = val;
+		}
+		break;
 	default:
 		return -ENOPROTOOPT;
 	}
@@ -518,6 +539,12 @@ static int inet_shutdown(struct sock *sk, int how) {
 	assert(sk->p_ops != NULL);
 
 	if (sk->p_ops->shutdown == NULL) {
+		/* A datagram socket has no connection to take down: what shutdown()
+		 * means for it -- no more receiving, no more sending -- is the
+		 * shutdown_flag kshutdown() has already set. Linux answers 0. */
+		if (sk->opt.so_type != SOCK_STREAM) {
+			return 0;
+		}
 		return -EOPNOTSUPP;
 	}
 

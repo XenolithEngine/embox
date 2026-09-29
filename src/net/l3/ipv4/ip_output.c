@@ -315,8 +315,10 @@ static int ip_make(const struct sock *sk,
 	skb->nh.raw = skb->mac.raw + dev->hdr_len;
 	skb->h.raw = skb->nh.raw + ip_length;
 
+	/* IP_TTL, if the socket set one; 64 otherwise, as before. */
 	ip_build(skb->nh.iph, ip_length + *data_size,
-			64, proto, src_ip, dst_ip);
+			(in_sk != NULL && in_sk->uc_ttl > 0) ? in_sk->uc_ttl : 64,
+			proto, src_ip, dst_ip);
 	if (IP_MIN_HEADER_SIZE < ip_length) {
 		ip_header_make_secure((struct sock *)sk, skb);
 	}
