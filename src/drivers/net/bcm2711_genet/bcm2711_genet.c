@@ -36,6 +36,7 @@
 #include <net/skbuff.h>
 #include <util/log.h>
 
+#include "bcm2711_genet.h"
 #include "genet_regs.h"
 
 #define BASE_ADDR     OPTION_GET(NUMBER, base_addr)
@@ -48,6 +49,7 @@
 #define USE_IRQ       OPTION_GET(NUMBER, use_irq)
 #define IRQ_NUM       OPTION_GET(NUMBER, irq_num)
 #define POLL_MS       OPTION_GET(NUMBER, poll_ms)
+#define LINK_POLL_MS  OPTION_GET(NUMBER, link_poll_ms)
 #define POLL_MS_IRQ   OPTION_GET(NUMBER, poll_ms_irq)
 
 #define GENET_MMIO_LEN 0x10000
@@ -56,36 +58,7 @@
 
 PERIPH_MEMORY_DEFINE(bcm2711_genet, BASE_ADDR, GENET_MMIO_LEN);
 
-static struct {
-	uintptr_t base;
-	uint8_t phy_addr;
-	uint8_t mac[6];
-	uint8_t mac_ok;
-	uint8_t link;
-	uint8_t full_duplex;
-	uint16_t speed;
-	uint16_t bmsr;
-	uint32_t aneg_ms;
-
-	uint8_t use_irq; /* the interrupt is attached and carrying traffic */
-	uint8_t promisc;
-	uint32_t mdf_ctrl;
-	uint32_t mdf_mask; /* which enable bits MDF_CTRL really has */
-
-	uint32_t tx_sent;
-	uint32_t tx_done;
-	uint32_t tx_fail;
-	uint32_t rx_packets;
-	uint32_t rx_bytes;
-	uint32_t rx_dropped;
-	uint32_t rx_errors;
-	uint32_t rx_frag;
-	uint32_t rx_resync;  /* times the rx indices were found out of step */
-	uint32_t rx_by_irq;
-	uint32_t rx_by_poll;
-	uint32_t irq_count;
-	uint32_t irq_rx;
-} genet_state;
+static struct bcm2711_genet_status genet_state;
 
 #define MBOX_BASE   0xFE00B880UL
 #define MBOX_READ   (MBOX_BASE + 0x00)
@@ -175,6 +148,10 @@ static void genet_set_hwaddr(uintptr_t base, const uint8_t mac[6]) {
 	    ((uint32_t)mac[0] << 24) | ((uint32_t)mac[1] << 16)
 	        | ((uint32_t)mac[2] << 8) | mac[3]);
 	genet_wr(base, GENET_UMAC_MAC1, ((uint32_t)mac[4] << 8) | mac[5]);
+}
+
+const struct bcm2711_genet_status *bcm2711_genet_status(void) {
+	return &genet_state;
 }
 
 /* ------------------------------------------------------------------ mdio */
@@ -383,11 +360,35 @@ static int genet_phy_reset(uintptr_t base, uint8_t phy) {
 	return -ETIMEDOUT;
 }
 
+/* What was negotiated, from the gigabit status and the partner's ability.
+ * Read whenever the link comes up, at bring-up and after a cable returns: the
+ * other end need not be the same switch, or the same speed. */
+static void genet_link_speed(uintptr_t base, uint8_t phy) {
+	int lpa;
+	int stat;
+
+	stat = genet_mdio_read(base, phy, MII_STAT1000);
+	lpa = genet_mdio_read(base, phy, MII_LPA);
+	genet_state.stat1000 = stat < 0 ? 0 : (uint16_t)stat;
+	genet_state.lpa = lpa < 0 ? 0 : (uint16_t)lpa;
+
+	if (genet_state.stat1000 & (STAT1000_1000FD | STAT1000_1000HD)) {
+		genet_state.speed = 1000;
+		genet_state.full_duplex = !!(genet_state.stat1000 & STAT1000_1000FD);
+	}
+	else if (genet_state.lpa & (ANAR_100FD | ANAR_100HD)) {
+		genet_state.speed = 100;
+		genet_state.full_duplex = !!(genet_state.lpa & ANAR_100FD);
+	}
+	else {
+		genet_state.speed = 10;
+		genet_state.full_duplex = !!(genet_state.lpa & ANAR_10FD);
+	}
+}
+
 static void genet_link_up(uintptr_t base, uint8_t phy) {
 	uint64_t start;
 	int bmsr;
-	int lpa;
-	int stat;
 	unsigned ms;
 
 	if (genet_phy_reset(base, phy)) {
@@ -407,7 +408,7 @@ static void genet_link_up(uintptr_t base, uint8_t phy) {
 	for (ms = 0; ms < ANEG_MS; ms++) {
 		/* Twice: BMSR_LINK is latching-low, so only the second read is the
 		 * state now. */
-		(void)genet_mdio_read(base, phy, MII_BMSR);
+		genet_state.bmsr_first = (uint16_t)genet_mdio_read(base, phy, MII_BMSR);
 		bmsr = genet_mdio_read(base, phy, MII_BMSR);
 		if (bmsr < 0) {
 			return;
@@ -420,6 +421,7 @@ static void genet_link_up(uintptr_t base, uint8_t phy) {
 	}
 	genet_state.aneg_ms = (uint32_t)((ktime_get_ns() - start) / 1000000u);
 	genet_state.link = !!(genet_state.bmsr & BMSR_LINK);
+	genet_state.aneg_done = !!(genet_state.bmsr & BMSR_ANEGDONE);
 
 	if (!genet_state.link) {
 		log_error("no link after %u ms (BMSR 0x%04x) -- cable?",
@@ -427,27 +429,7 @@ static void genet_link_up(uintptr_t base, uint8_t phy) {
 		return;
 	}
 
-	stat = genet_mdio_read(base, phy, MII_STAT1000);
-	lpa = genet_mdio_read(base, phy, MII_LPA);
-	if (stat < 0) {
-		stat = 0;
-	}
-	if (lpa < 0) {
-		lpa = 0;
-	}
-
-	if (stat & (STAT1000_1000FD | STAT1000_1000HD)) {
-		genet_state.speed = 1000;
-		genet_state.full_duplex = !!(stat & STAT1000_1000FD);
-	}
-	else if (lpa & (ANAR_100FD | ANAR_100HD)) {
-		genet_state.speed = 100;
-		genet_state.full_duplex = !!(lpa & ANAR_100FD);
-	}
-	else {
-		genet_state.speed = 10;
-		genet_state.full_duplex = !!(lpa & ANAR_10FD);
-	}
+	genet_link_speed(base, phy);
 
 	log_info("link up: %u Mbps %s duplex after %u ms (BMSR 0x%04x)",
 	    genet_state.speed, genet_state.full_duplex ? "full" : "half",
@@ -602,6 +584,7 @@ static uint32_t genet_rx_cons;  /* the index the block sees    */
 static struct net_device *genet_netdev;
 
 static void genet_link_bringup(void);
+static void genet_link_start(void);
 static void *genet_link_thread(void *arg);
 
 static void genet_rx_ring_init(uintptr_t base) {
@@ -1104,6 +1087,9 @@ static int genet_init(void) {
 	int id1;
 	int id2;
 
+	genet_state.probed = 1;
+	genet_state.enabled = ENABLED;
+
 	if (!ENABLED) {
 		/* Reading an unmapped address on this SoC is a bus abort rather
 		 * than 0xffffffff, so the "absent" branch below never runs: where
@@ -1116,6 +1102,7 @@ static int genet_init(void) {
 	genet_state.phy_addr = PHY_ADDR;
 
 	rev = genet_rd(base, GENET_SYS_REV_CTRL);
+	genet_state.rev = rev;
 
 	/* A block that is absent, unclocked or at the wrong address reads back
 	 * all ones or all zeros; a real one carries a plausible generation. */
@@ -1126,6 +1113,10 @@ static int genet_init(void) {
 
 	major = GENET_MAJOR(rev);
 	major = major == 6 ? 5 : major == 5 ? 4 : major == 0 ? 1 : major;
+
+	genet_state.major = major;
+	genet_state.minor = GENET_MINOR(rev);
+	genet_state.alive = 1;
 
 	log_info("genet v%u.%u at %p, SYS_REV_CTRL 0x%08x", major, GENET_MINOR(rev),
 	    (void *)base, rev);
@@ -1145,15 +1136,23 @@ static int genet_init(void) {
 		return 0;
 	}
 
-	log_info("PHY id 0x%08x at MDIO address %u",
-	    ((uint32_t)id1 << 16) | (uint32_t)id2, (unsigned)PHY_ADDR);
+	genet_state.phy_id = ((uint32_t)id1 << 16) | (uint32_t)id2;
+	genet_state.mdio_ok = 1;
+
+	log_info("PHY id 0x%08x at MDIO address %u", genet_state.phy_id,
+	    (unsigned)PHY_ADDR);
 
 	genet_rgmii_init(base);
 
 	/* Try the cached view of the buffer, then the uncached one. */
-	if (genet_mailbox_mac(genet_state.mac, 0) == 0
-	    || genet_mailbox_mac(genet_state.mac, 0xC0000000u) == 0) {
+	if (genet_mailbox_mac(genet_state.mac, 0) == 0) {
 		genet_state.mac_ok = 1;
+	}
+	else if (genet_mailbox_mac(genet_state.mac, 0xC0000000u) == 0) {
+		genet_state.mac_ok = 1;
+		genet_state.mac_bus_base = 0xC0000000u;
+	}
+	if (genet_state.mac_ok) {
 		log_info("MAC %02x:%02x:%02x:%02x:%02x:%02x from the VideoCore OTP",
 		    genet_state.mac[0], genet_state.mac[1], genet_state.mac[2],
 		    genet_state.mac[3], genet_state.mac[4], genet_state.mac[5]);
@@ -1171,6 +1170,7 @@ static int genet_init(void) {
 
 	/* Autonegotiation takes seconds against a real switch and nothing at
 	 * boot needs the link, so it runs in a thread. */
+	genet_state.link_pending = 1;
 	if (!thread_create(0, genet_link_thread, NULL)) {
 		log_error("could not start the link thread; negotiating inline");
 		genet_link_bringup();
@@ -1179,17 +1179,27 @@ static int genet_init(void) {
 	return 0;
 }
 
-/* The rest of bring-up, off the boot path: negotiate, configure the MAC for
- * whatever was negotiated, start the rings, and register the interface. */
+/* The rest of bring-up, off the boot path: negotiate and, if there is a
+ * link, start the interface. Without one the link thread starts it when a
+ * cable arrives (link_poll_ms). */
 static void genet_link_bringup(void) {
-	uintptr_t base = genet_state.base;
-
-	genet_link_up(base, PHY_ADDR);
+	genet_link_up(genet_state.base, PHY_ADDR);
+	genet_state.link_pending = 0;
 
 	if (!genet_state.link) {
-		log_error("no link, not starting the interface");
+		log_error(LINK_POLL_MS ? "no link; the interface starts when a cable does"
+		                       : "no link, not starting the interface");
 		return;
 	}
+
+	genet_link_start();
+}
+
+/* Configure the MAC for what was negotiated, start the rings and register
+ * the interface. Once: a link that comes back later only needs the MAC told
+ * its new speed. */
+static void genet_link_start(void) {
+	uintptr_t base = genet_state.base;
 
 	genet_adjust_link(base);
 	genet_tx_ring_init(base);
@@ -1198,8 +1208,79 @@ static void genet_link_bringup(void) {
 	genet_netdev_up();
 }
 
+/* The link as the PHY sees it now: 1 up, 0 down, -1 unreadable. *dropped is
+ * set when the latched first read says it went down since the last look,
+ * even if it is up again by the second: a cable pulled and replugged within
+ * one period still means renegotiated, maybe at another speed. */
+static int genet_link_sample(uintptr_t base, uint8_t phy, int *dropped) {
+	int first;
+	int bmsr;
+
+	first = genet_mdio_read(base, phy, MII_BMSR);
+	bmsr = genet_mdio_read(base, phy, MII_BMSR);
+	if (first < 0 || bmsr < 0) {
+		return -1;
+	}
+	genet_state.bmsr_first = (uint16_t)first;
+	genet_state.bmsr = (uint16_t)bmsr;
+	*dropped = !(first & BMSR_LINK);
+
+	return (bmsr & BMSR_LINK) && (bmsr & BMSR_ANEGDONE);
+}
+
+/* Bring-up, and then the link for as long as the system runs: a cable pulled
+ * and plugged back used to stay down until a reboot, and a board booted
+ * without one never started the interface. The PHY renegotiates by itself;
+ * what the driver owes it is to notice, and to tell the MAC the new speed.
+ * After bring-up this thread is the only one on MDIO. */
 static void *genet_link_thread(void *arg) {
+	uintptr_t base = genet_state.base;
+	int started;
+	int dropped;
+	int up;
+
 	(void)arg;
+
 	genet_link_bringup();
+	started = genet_state.link;
+
+	if (LINK_POLL_MS == 0) {
+		return NULL;
+	}
+
+	while (1) {
+		usleep(LINK_POLL_MS * 1000);
+
+		up = genet_link_sample(base, PHY_ADDR, &dropped);
+		if (up < 0) {
+			continue;
+		}
+
+		if (genet_state.link && (!up || dropped)) {
+			genet_state.link = 0;
+			genet_state.link_drops++;
+			log_error("link down (BMSR 0x%04x, latched 0x%04x), %u time(s)",
+			    genet_state.bmsr, genet_state.bmsr_first,
+			    genet_state.link_drops);
+		}
+
+		if (!genet_state.link && up) {
+			genet_link_speed(base, PHY_ADDR);
+			genet_state.link = 1;
+			genet_state.aneg_done = 1;
+			genet_state.link_returns++;
+			log_info("link up again: %u Mbps %s duplex (BMSR 0x%04x)",
+			    genet_state.speed, genet_state.full_duplex ? "full" : "half",
+			    genet_state.bmsr);
+			if (started) {
+				genet_adjust_link(base);
+			}
+			else {
+				started = 1;
+				genet_link_start();
+			}
+		}
+	}
+
 	return NULL;
 }
