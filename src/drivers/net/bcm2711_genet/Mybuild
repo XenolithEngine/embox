@@ -45,8 +45,17 @@ module bcm2711_genet {
 	option number poll_ms = 1
 	option number poll_ms_irq = 200
 
+	/* How often, in ms, the link thread reads the PHY after bring-up, so a
+	 * link that drops, returns or comes up late is noticed. 0 leaves the
+	 * link as bring-up found it. */
+	option number link_poll_ms = 1000
+
 	source "bcm2711_genet.c"
 	source "genet_regs.h"
+
+	/* What the driver found and counted, for a status page. */
+	@IncludeExport(path="drivers/net")
+	source "bcm2711_genet.h"
 
 	depends embox.driver.periph_memory
 	depends embox.kernel.irq_api
