@@ -60,6 +60,11 @@ extern int scandir(const char *dir, struct dirent ***namelist,
 
 extern int alphasort(const struct dirent **d1, const struct dirent **d2);
 
+/* Not POSIX. The absolute path of the directory DIRP reads, into BUF of SIZE
+ * bytes: 0, or -1 and errno. There are no directory descriptors to hand out,
+ * so a dirfd() layered on top has to open the directory by name. */
+extern int dirent_path(DIR *dirp, char *buf, size_t size);
+
 __END_DECLS
 
 #endif /* DIRENT_H_ */

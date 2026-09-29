@@ -169,3 +169,16 @@ void seekdir(DIR *dir, long loc) {
 	while (dir->pos < loc && readdir(dir)) {
 	}
 }
+
+int dirent_path(DIR *dir, char *buf, size_t size) {
+	int err;
+
+	if (!dir) {
+		return SET_ERRNO(EBADF);
+	}
+	err = dentry_full_path_n(dir->dir_dentry, buf, size);
+	if (err) {
+		return SET_ERRNO(-err);
+	}
+	return 0;
+}
