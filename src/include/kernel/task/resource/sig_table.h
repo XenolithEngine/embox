@@ -20,6 +20,11 @@ __BEGIN_DECLS
 extern struct sigaction * task_resource_sig_table(
 		const struct task *task);
 
+typedef void (*task_sig_handler_t)(int);
+
+/* What SIG_DFL means for this signal: the handler a new task starts with. */
+extern task_sig_handler_t task_resource_sig_default(int sig);
+
 #define task_self_resource_sig_table() \
 	task_resource_sig_table(task_self())
 
