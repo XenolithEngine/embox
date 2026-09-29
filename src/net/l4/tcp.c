@@ -173,17 +173,19 @@ int alloc_prep_skb(struct tcp_sock *tcp_sk, size_t opt_len,
 	return 0;
 }
 
+/* The scheduler lock first, always, and the socket's count under it. The
+ * count is per socket, not per holder, so taking sched_lock() only on 0 -> 1
+ * would let a holder on another core proceed without the lock. sched_lock()
+ * nests by itself, so taking it every time costs a counter increment. */
 void tcp_sock_lock(struct tcp_sock *tcp_sk, unsigned int obj) {
-	if (tcp_sk->lock++ == 0) {
-		sched_lock();
-	}
+	sched_lock();
+	tcp_sk->lock++;
 }
 
 void tcp_sock_unlock(struct tcp_sock *tcp_sk, unsigned int obj) {
 	assert(tcp_sk->lock != 0);
-	if (--tcp_sk->lock == 0) {
-		sched_unlock();
-	}
+	tcp_sk->lock--;
+	sched_unlock();
 }
 
 void tcp_seq_state_set_wind_value(struct tcp_seq_state *tcp_seq_st,
