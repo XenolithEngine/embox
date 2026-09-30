@@ -30,6 +30,10 @@ module no_cpudata extends cpudata_api {
 }
 
 module cpudata extends cpudata_api {
+	/* cpudata_init() runs with the MMU off, where every access is to Device
+	 * memory: no library calls and no SIMD registers */
+	@Cflags("-fno-builtin")
+	@Cflags("-mgeneral-regs-only")
 	source "cpudata.c", "cpudata_impl.h", "cpudata.lds.S"
 	depends embox.arch.cpu
 	@NoRuntime depends embox.compat.libc.assert

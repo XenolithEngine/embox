@@ -3,6 +3,11 @@ package embox.arch.aarch64
 module mmu extends embox.mem.vmem {
 	source "mmu.c"
 	source "mmu.h"
+	/* Builds the early tables with the MMU off, where every access is to
+	 * Device memory: no library calls (a zeroing loop would become memset())
+	 * and no SIMD registers (a fill loop would become Q-register stores). */
+	@Cflags("-fno-builtin")
+	@Cflags("-mgeneral-regs-only")
 	source "mmu_early.c"
 
 	option number granule = 4 /* size of pages, in kiB, can be 4, 16 or 64 */

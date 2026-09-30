@@ -7,8 +7,19 @@
  */
 #include <hal/cpu.h>
 #include <hal/reg.h>
+#include <kernel/boot_crumb.h>
 
 .weak gicv3_init_el3
+/* A board's first word, before anything can hang: the Pi 4 arms its SoC
+ * watchdog here. No stack yet; x9-x15 only. */
+.weak aarch64_board_first
+
+/* Names for the crumbs taken before kernel_start() */
+.section .rodata
+crumb_what_data:
+	.asciz "bss+data (asm)"
+crumb_what_cpudata:
+	.asciz "cpudata_init (asm)"
 
 /* The boot x0, in .data because .bss is zeroed much later */
 .section .data
@@ -29,6 +40,10 @@ aarch64_reset_handler:
 	cbnz    x2, 1f
 	str     x0, [x1]
 1:
+	ldr     x9, =aarch64_board_first
+	cbz     x9, 2f
+	blr     x9
+2:
 
 	/* x20: 0 primary, 1 secondary. x21: the logical CPU id. Both are
 	 * callee-saved and stay live down to el1_entry. */
@@ -250,9 +265,19 @@ data_loop:
 	bgt     data_loop
 data_loop_done:
 
+	/* Where the boot is, for a board that keeps it across a reset
+	 * (kernel/boot_crumb.h). The stack, .bss and .data are there from
+	 * here on, which is what a C crumb needs. */
+	mov     x0, #BOOT_CRUMB_ASM_DATA
+	ldr     x1, =crumb_what_data
+	bl      board_boot_crumb
+
 #if NCPU > 1
 	/* Copy the initialised per-CPU block over the other NCPU - 1 copies */
 	bl      cpudata_init
+	mov     x0, #BOOT_CRUMB_ASM_CPUDATA
+	ldr     x1, =crumb_what_cpudata
+	bl      board_boot_crumb
 #endif /* NCPU > 1 */
 
 	/* Jump to arch-independent part */
