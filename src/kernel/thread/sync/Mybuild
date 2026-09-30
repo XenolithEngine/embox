@@ -10,6 +10,7 @@ module sync {
 }
 
 module mutex {
+	@Cflags("-O2") /* thread switch and wakeup path, even in a -O0 kernel */
 	source "mutex.c"
 
 	depends embox.kernel.sched.priority.priority
@@ -20,6 +21,7 @@ module mutex {
 }
 
 module sem {
+	@Cflags("-O2") /* thread switch and wakeup path, even in a -O0 kernel */
 	source "semaphore.c"
 
 	depends embox.kernel.sched.sched
@@ -32,6 +34,7 @@ module barrier {
 }
 
 module cond {
+	@Cflags("-O2") /* thread switch and wakeup path, even in a -O0 kernel */
 	source "cond.c"
 
 	depends mutex

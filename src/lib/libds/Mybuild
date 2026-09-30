@@ -7,6 +7,7 @@ static module libds {
 
 	@IncludeExport(path="lib/libds", target_name="bitmap.h")
 	source "bitmap/bitmap.h"
+	@Cflags("-O2") /* thread switch and wakeup path, even in a -O0 kernel */
 	source "bitmap/bitmap_find_bit.c"
 
 	@IncludeExport(path="lib/libds", target_name="hashtable.h")

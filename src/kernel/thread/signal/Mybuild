@@ -23,6 +23,7 @@ module sigstate_stub extends sigstate_api {
 
 module sigstate extends sigstate_api {
 	source "sigstate.h"
+	@Cflags("-O2") /* thread switch and wakeup path, even in a -O0 kernel */
 	source "sigstate.c"
 	depends siginfoq_api
 

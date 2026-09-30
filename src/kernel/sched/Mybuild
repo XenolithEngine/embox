@@ -6,6 +6,7 @@ module sched {
 	depends idle
 	depends boot
 
+	@Cflags("-O2") /* thread switch and wakeup path, even in a -O0 kernel */
 	source "sched.c"
 	depends embox.kernel.addr_space
 
@@ -34,6 +35,7 @@ module schedee {
 abstract module sched_ticker { }
 
 module sched_ticker_preempt extends sched_ticker {
+	@Cflags("-O2") /* thread switch and wakeup path, even in a -O0 kernel */
 	source "sched_ticker.c"
 	option number tick_interval = 100
 	depends embox.kernel.timer.sys_timer /* for timeslices support */
@@ -44,6 +46,7 @@ module sched_ticker_stub extends sched_ticker {
 }
 
 module wait_queue {
+	@Cflags("-O2") /* thread switch and wakeup path, even in a -O0 kernel */
 	source "waitq.c"
 
 	@NoRuntime depends embox.lib.libds
@@ -59,6 +62,7 @@ module waitq_protect_link_stub extends waitq_protect_link {
 }
 
 module waitq_protect_link_store extends waitq_protect_link {
+	@Cflags("-O2") /* thread switch and wakeup path, even in a -O0 kernel */
 	source "waitq_protect_link_store.c"
 	source "waitq_protect_link_store.h"
 }

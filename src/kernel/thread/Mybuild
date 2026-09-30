@@ -11,7 +11,9 @@ module core {
 	option number thread_pool_size=16
 	option string log_level="LOG_NONE"
 
+	@Cflags("-O2") /* thread switch and wakeup path, even in a -O0 kernel */
 	source "core.c"
+	@Cflags("-O2") /* thread switch and wakeup path, even in a -O0 kernel */
 	source "thread_switch.c"
 
 	@IncludeExport(path="kernel/thread", target_name="types.h")
@@ -55,6 +57,7 @@ module signal_stub extends signal_api {
 }
 
 module signal_impl extends signal_api {
+	@Cflags("-O2") /* thread switch and wakeup path, even in a -O0 kernel */
 	source "signal.c"
 	@NoRuntime depends embox.kernel.thread.signal.sigstate
 	@NoRuntime depends embox.kernel.thread.signal.siginfoq

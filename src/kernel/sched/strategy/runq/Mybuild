@@ -4,19 +4,23 @@ package embox.kernel.sched.strategy.runq
 abstract module api { }
 
 module prioq extends api {
+	@Cflags("-O2") /* thread switch and wakeup path, even in a -O0 kernel */
 	source "prioq.c", "prioq.h"
 
 	@NoRuntime depends embox.lib.libds
 }
 
 module list extends api {
+	@Cflags("-O2") /* thread switch and wakeup path, even in a -O0 kernel */
 	source "list.c", "list.h"
 }
 
 module list_array extends api {
+	@Cflags("-O2") /* thread switch and wakeup path, even in a -O0 kernel */
 	source "list_array.c", "list_array.h"
 }
 
 module dlist_prio extends api {
+	@Cflags("-O2") /* thread switch and wakeup path, even in a -O0 kernel */
 	source "dlist_prio.c", "dlist_prio.h"
 }

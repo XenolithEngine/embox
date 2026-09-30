@@ -9,6 +9,7 @@ module no_bkl extends bkl_api {
 }
 
 module bkl extends bkl_api {
+	@Cflags("-O2") /* thread switch and wakeup path, even in a -O0 kernel */
 	source "bkl.c"
 }
 

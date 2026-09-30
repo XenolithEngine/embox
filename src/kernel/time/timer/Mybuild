@@ -6,6 +6,7 @@ abstract module sleep_api { }
 module sys_timer {
 	option number timer_quantity=20
 
+	@Cflags("-O2") /* thread switch and wakeup path, even in a -O0 kernel */
 	source "sys_timer.c"
 
 	@NoRuntime depends embox.kernel.timer.strategy.api

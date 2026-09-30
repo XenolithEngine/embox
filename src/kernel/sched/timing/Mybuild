@@ -10,6 +10,7 @@ module none extends timing {
 
 module running extends timing {
 	source "running_time.h"
+	@Cflags("-O2") /* thread switch and wakeup path, even in a -O0 kernel */
 	source "running_time.c"
 
  	depends embox.compat.posix.util.time
