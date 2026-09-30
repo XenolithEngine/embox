@@ -26,6 +26,12 @@ struct context {
 	 * that never leaves EL1. */
 	uint64_t sp_el0;
 	uint64_t tpidr_el0;
+	/* XENOLITH_CONTEXT_FP: FPCR and FPSR of a thread that switched away by
+	 * its own call: AAPCS64 has a callee keep FPCR, and C11 gives each thread
+	 * its own floating-point environment. A preempted thread has both in its
+	 * exception frame. Offsets 136 and 144 in context_switch. */
+	uint64_t fpcr;
+	uint64_t fpsr;
 };
 
 #endif /* __ASSEMBLER__ */
