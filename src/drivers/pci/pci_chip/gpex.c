@@ -23,8 +23,10 @@
 #define GPEX_IRQ_BASE  35
 #define GPEX_IRQ_NUM   4 /* GPEX_IRQ_BASE + 0, ... GPEX_IRQ_BASE + 3 */
 
+/* ECAM decodes byte and halfword accesses at their own offsets, so the
+ * offset is not rounded down to a dword. */
 #define PCI_REG_ADDR(bus, physdev, fun, where) \
-	(((where) & ~3) | ((fun) << 12) | ((physdev) << 15) | ((bus) << 20))
+	(((where) & 0xFFF) | ((fun) << 12) | ((physdev) << 15) | ((bus) << 20))
 
 static uint32_t gpex_read_config(uint32_t bus, uint32_t dev_fn,
 				uint32_t where, void *value, size_t size) {
@@ -121,8 +123,13 @@ uint32_t pci_write_config32(uint32_t bus, uint32_t dev_fn,
 	return gpex_write_config(bus, dev_fn, where, &value, sizeof(uint32_t));
 }
 
+/* QEMU virt swizzles INTx as (slot + pin) % 4, pin 0 for INTA, onto SPIs
+ * 3..6 (INTIDs 35..38); see the interrupt-map in hw/arm/virt.c. irq_pin is
+ * the config register (1 for INTA, 0 counted as INTA). virt has no bridges. */
 unsigned int pci_irq_number(struct pci_slot_dev *dev) {
-	return (unsigned int) (GPEX_IRQ_BASE + (dev->irq_pin + 1) % GPEX_IRQ_NUM);
+	unsigned int pin = dev->irq_pin ? dev->irq_pin - 1u : 0u;
+
+	return (unsigned int) (GPEX_IRQ_BASE + (dev->slot + pin) % GPEX_IRQ_NUM);
 }
 
 PERIPH_MEMORY_DEFINE(gpex_mmio, GPEX_MMIO_BASE, 0x2EFF0000);
