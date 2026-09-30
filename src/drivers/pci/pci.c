@@ -80,6 +80,48 @@ static inline int get_cap_flags(struct pci_slot_dev *pci_dev, uint32_t where,
 	return -1;
 }
 
+/* At most this many entries: a list that loops is not walked forever. */
+#define PCI_CAP_WALK_MAX 48
+
+uint8_t pci_find_next_capability(struct pci_slot_dev *dev, uint8_t pos,
+    uint8_t cap_id) {
+	uint16_t status;
+	uint8_t where, id;
+	int steps;
+
+	pci_read_config16(dev->busn, (dev->slot << 3) | dev->func, PCI_STATUS,
+	    &status);
+	if (!(status & PCI_STATUS_CAP_LIST)) {
+		return 0;
+	}
+
+	if (pos == 0) {
+		pci_read_config8(dev->busn, (dev->slot << 3) | dev->func,
+		    PCI_CAPABILITY_LIST, &where);
+		where &= ~0x3;
+	}
+	else if (get_cap_next(dev, pos, &where)) {
+		return 0;
+	}
+
+	for (steps = 0; where >= 0x40 && steps < PCI_CAP_WALK_MAX; steps++) {
+		if (get_cap_id(dev, where, &id) || id == 0xff) {
+			return 0;
+		}
+		if (id == cap_id) {
+			return where;
+		}
+		if (get_cap_next(dev, where, &where)) {
+			return 0;
+		}
+	}
+	return 0;
+}
+
+uint8_t pci_find_capability(struct pci_slot_dev *dev, uint8_t cap_id) {
+	return pci_find_next_capability(dev, 0, cap_id);
+}
+
 static void __pci_dev_fill_caps(struct pci_slot_dev *pci_dev) {
 	uint32_t where;
 	uint8_t val8;

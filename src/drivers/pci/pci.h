@@ -152,6 +152,13 @@ struct pci_slot_dev *pci_insert_dev(char configured, uint32_t bus,
 extern void pci_set_master(struct pci_slot_dev *slot_dev);
 extern void pci_intx(struct pci_slot_dev *pdev, int enable);
 
+/* Offset of the first capability `cap_id` after `pos` in the device's list (0:
+ * from the start), 0 if there is none. A device may carry several of one id --
+ * virtio's regions are all PCI_CAP_ID_VNDR -- so walk with the returned offset. */
+extern uint8_t pci_find_next_capability(struct pci_slot_dev *dev, uint8_t pos,
+    uint8_t cap_id);
+extern uint8_t pci_find_capability(struct pci_slot_dev *dev, uint8_t cap_id);
+
 extern int pci_read_config_byte(struct pci_slot_dev *dev, int where,
     uint8_t *val);
 extern int pci_read_config_word(struct pci_slot_dev *dev, int where,
