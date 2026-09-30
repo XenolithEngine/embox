@@ -87,6 +87,12 @@
 #define PCI_BASE_ADDR_REG_4         0x20 /* 32 bits */
 #define PCI_BASE_ADDR_REG_5         0x24 /* 32 bits */
 #define PCI_BASE_ADDR_IO_MASK       (~0x03)
+#define PCI_BASE_ADDR_SPACE_IO      0x01 /* 1: I/O space, 0: memory */
+#define PCI_BASE_ADDR_MEM_TYPE_MASK 0x06
+#define PCI_BASE_ADDR_MEM_TYPE_32   0x00 /* anywhere in 32-bit space */
+#define PCI_BASE_ADDR_MEM_TYPE_64   0x04 /* two registers, 64-bit */
+#define PCI_BASE_ADDR_MEM_PREFETCH  0x08
+#define PCI_BASE_ADDR_MEM_MASK      (~0x0FU)
 
 /* Header type 0 (normal devices) */
 #define PCI_CARDBUS_CIS             0x28 /* 32 bits */

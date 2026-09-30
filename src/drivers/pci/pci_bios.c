@@ -26,22 +26,27 @@ EMBOX_UNIT_INIT(pci_bios_init);
 struct space_allocator {
 	void *space_base;
 	size_t space_size;
+	uintptr_t space_end;
 };
 
 static struct space_allocator pci_allocator = {
     .space_base = (void *)PCI_SPACE_BASE,
     .space_size = PCI_SPACE_SIZE,
+    .space_end = (uintptr_t)PCI_SPACE_BASE + PCI_SPACE_SIZE,
 };
 
+/* NULL, and nothing taken, if the window does not fit before space_end. */
 void *space_alloc(struct space_allocator *allocator, size_t win, size_t align) {
-	void *ret;
-	allocator->space_base =
-	    (void *)binalign_bound((size_t)allocator->space_base, align);
+	uintptr_t base;
 
-	ret = allocator->space_base;
-	allocator->space_base = (void *)((size_t)(allocator->space_base) + win);
+	base = binalign_bound((uintptr_t)allocator->space_base, align);
+	if (base < (uintptr_t)allocator->space_base || base > allocator->space_end
+	    || win > allocator->space_end - base) {
+		return NULL;
+	}
 
-	return ret;
+	allocator->space_base = (void *)(base + win);
+	return (void *)base;
 }
 
 void *space_current(struct space_allocator *allocator) {
@@ -50,32 +55,69 @@ void *space_current(struct space_allocator *allocator) {
 
 static void pci_bus_configure(uint32_t busn);
 
+/* Size and place one function's BARs; under -kernel no firmware has done it.
+ * Memory BARs get a window below 4 GiB (a 64-bit BAR's upper half is 0); I/O
+ * BARs keep their value, I/O decoding stays off. A BAR that does not fit is 0. */
 static int pci_slot_configure(uint32_t busn, uint32_t devfn) {
 	int bar_num;
-	uint32_t length;
-	uint32_t bar;
+	uint32_t orig, bar, bar_hi;
+	uint64_t length;
 	void *window;
 
 	for (bar_num = 0; bar_num < 6; bar_num++) {
-		/* Write all '1' */
-		pci_write_config32(busn, devfn, PCI_BASE_ADDR_REG_0 + (bar_num << 2),
-		    0xFFFFFFFF);
-		/* Read back size */
-		pci_read_config32(busn, devfn, PCI_BASE_ADDR_REG_0 + (bar_num << 2),
-		    &bar);
+		const uint32_t reg = PCI_BASE_ADDR_REG_0 + (bar_num << 2);
+		int is64;
+
+		pci_read_config32(busn, devfn, reg, &orig);
+		/* Write all '1' and read back the size */
+		pci_write_config32(busn, devfn, reg, 0xFFFFFFFF);
+		pci_read_config32(busn, devfn, reg, &bar);
 		/* if no bar available */
 		if (bar == 0) {
 			continue;
 		}
-		length = 1 + ~(bar & 0xFFFFFFF0);
 
-		window = space_alloc(&pci_allocator, length, length);
-		pci_write_config32(busn, devfn, PCI_BASE_ADDR_REG_0 + (bar_num << 2),
-		    (uint32_t)(uintptr_t)window);
-		log_debug("pci bus %d fn = %d bar_num %d "
-		          "bar = 0x%X win = 0x%X len = 0x%X\n",
-		    busn, devfn, bar_num, bar, (uint32_t)(uintptr_t)window,
-		    (uint32_t)(uintptr_t)length);
+		if (bar & PCI_BASE_ADDR_SPACE_IO) {
+			pci_write_config32(busn, devfn, reg, orig);
+			log_debug("pci bus %d fn = %d bar_num %d: I/O, left as is", busn,
+			    devfn, bar_num);
+			continue;
+		}
+
+		is64 = (bar & PCI_BASE_ADDR_MEM_TYPE_MASK) == PCI_BASE_ADDR_MEM_TYPE_64
+		       && bar_num < 5;
+		bar_hi = 0;
+		if (is64) {
+			pci_write_config32(busn, devfn, reg + 4, 0xFFFFFFFF);
+			pci_read_config32(busn, devfn, reg + 4, &bar_hi);
+		}
+
+		length = ~((((uint64_t)bar_hi << 32) | (bar & PCI_BASE_ADDR_MEM_MASK))
+		           | (is64 ? 0 : 0xFFFFFFFF00000000ull))
+		         + 1;
+
+		window = NULL;
+		if (length != 0 && length < 0x100000000ull) {
+			window = space_alloc(&pci_allocator, (size_t)length, (size_t)length);
+		}
+		if (!window) {
+			log_error("pci bus %d fn = %d bar_num %d: 0x%llx bytes do not fit "
+			          "the window, left unassigned",
+			    busn, devfn, bar_num, (unsigned long long)length);
+		}
+
+		pci_write_config32(busn, devfn, reg, (uint32_t)(uintptr_t)window);
+		if (is64) {
+			pci_write_config32(busn, devfn, reg + 4, 0);
+		}
+		log_debug("pci bus %d fn = %d bar_num %d%s "
+		          "bar = 0x%X win = 0x%X len = 0x%llX\n",
+		    busn, devfn, bar_num, is64 ? " (64-bit)" : "", bar,
+		    (uint32_t)(uintptr_t)window, (unsigned long long)length);
+
+		if (is64) {
+			bar_num++;
+		}
 	}
 	return 0;
 }
