@@ -219,18 +219,43 @@ extern int sigaltstack(const stack_t *ss, stack_t *oss);
 
 extern int sigpending(sigset_t *);
 
+/* No signal is ever blocked: a pending signal is handled whatever the mask.
+ * A mask change is accepted and changes nothing, and the old mask is the empty
+ * one, which is what the thread has. A caller that relies on a block to keep a
+ * handler from running is not served.
+ *
+ * SIG_SETMASK and SIG_UNBLOCK are both 1; with no mask there is nothing to
+ * tell them apart for. */
+static inline int __sigmask_accept(int how, sigset_t *oldset) {
+	if (how != SIG_BLOCK && how != SIG_SETMASK && how != SIG_UNBLOCK) {
+		return EINVAL;
+	}
+	if (oldset) {
+		unsigned char *p = (unsigned char *)oldset;
+		unsigned int i;
+
+		for (i = 0; i < sizeof(*oldset); i++) {
+			p[i] = 0;
+		}
+	}
+	return 0;
+}
+
 static inline int sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
-	(void)how;
+	int err;
+
 	(void)set;
-	(void)oldset;
-	return -ENOSYS;
+	err = __sigmask_accept(how, oldset);
+	if (err) {
+		errno = err;
+		return -1;
+	}
+	return 0;
 }
 
 static inline int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset) {
-	(void)how;
 	(void)set;
-	(void)oldset;
-	return -ENOSYS;
+	return __sigmask_accept(how, oldset);
 }
 
 __END_DECLS
