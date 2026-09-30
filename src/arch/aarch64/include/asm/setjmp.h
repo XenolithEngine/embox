@@ -7,7 +7,11 @@
  * All callee preserved registers:
  * SP, LR, x19-x28
  */
-#define _JBLEN 12
+/* x19-x28, x29, x30, an unused word, SP, d8-d15: musl's aarch64 layout, so
+ * an EL1 and an EL0 jmp_buf are the same (setjmp.S). The engine's libraries
+ * take this size from the sysroot copy of this header: changing it means
+ * rebuilding them against the new export. */
+#define _JBLEN 22
 
 #ifndef __ASSEMBLER__
 
