@@ -41,5 +41,9 @@ void * thread_stack_alloc(struct thread *t, size_t size) {
 	t->stack.stack += size;
 	t->stack.stack_sz -= size;
 
+	/* What was allocated sits where the canary was: put it at the new
+	 * bottom. */
+	thread_stack_canary_set(t);
+
 	return space;
 }

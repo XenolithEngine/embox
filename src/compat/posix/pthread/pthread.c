@@ -54,6 +54,10 @@ int pthread_attr_getscope(const pthread_attr_t *attr, int *contentionscope) {
 */
 int pthread_attr_init(pthread_attr_t *attr) {
 	attr->flags = 0;
+	/* No stack asked for: pthread_create() reads stack_size, and an
+	 * attribute on the caller's stack holds whatever was there. */
+	attr->stack = NULL;
+	attr->stack_size = 0;
 
 	if (pthread_attr_setdetachstate(attr, 0)) {
 		return -EINVAL;
@@ -161,7 +165,12 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
 
 	flags = detached | inherit | THREAD_FLAG_SUSPENDED;
 
-	t = thread_create(flags, start_routine, arg);
+	/* A size below the default gets the default (pthread_stack_impl.c). */
+	if (pattr->stack_size > THREAD_DEFAULT_STACK_SIZE) {
+		t = thread_create_with_stack(flags, pattr->stack_size, start_routine, arg);
+	} else {
+		t = thread_create(flags, start_routine, arg);
+	}
 	if (ptr2err(t)) {
 		/*
 		 * The pthread_create() function will fail if:

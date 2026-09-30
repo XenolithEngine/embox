@@ -11,7 +11,9 @@
 #include <hal/cpu.h>
 
 #include <kernel/thread.h>
+#include <kernel/thread/thread_stack.h>
 #include <kernel/addr_space.h>
+#include <kernel/panic.h>
 
 static struct thread *saved_prev __cpudata__; // XXX
 
@@ -43,6 +45,15 @@ static void thread_prepare_switch(struct thread *prev, struct thread *next) {
 extern void thread_set_current(struct thread *t);
 /** Locks: IPL. */
 void thread_context_switch(struct thread *prev, struct thread *next) {
+	/* The thread leaving the core has done all it will do on its stack for
+	 * now: if it went past the bottom, say so here, while the damage is one
+	 * switch old and the thread is known. */
+	if (!thread_stack_canary_ok(prev)) {
+		panic("stack overflow: thread %d (%p), stack %p, %zu bytes\n",
+		    prev->id, (void *)prev, thread_stack_get(prev),
+		    thread_stack_get_size(prev));
+	}
+
 	thread_prepare_switch(prev, next);
 
 	/* Preserve initial semantics of prev/next. */

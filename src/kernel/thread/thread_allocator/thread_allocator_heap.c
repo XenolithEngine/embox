@@ -31,7 +31,7 @@ struct thread_info {
 POOL_DEF(thread_info_pool, struct thread_info, POOL_SZ);
 
 static struct page_allocator *thread_heap_allocator;
-static int all_stacks_sz = 0;
+static size_t all_stacks_sz = 0;
 
 void *thread_user_stack_alloc(struct thread *t, size_t stack_sz) {
 	struct thread_info *ti;
@@ -40,8 +40,8 @@ void *thread_user_stack_alloc(struct thread *t, size_t stack_sz) {
 
 	stack_sz = pages * PAGE_SIZE();
 
-	all_stacks_sz += stack_sz;
-	log_debug("stack_sz=%d, all_stacks=%d", stack_sz, all_stacks_sz);
+	log_debug("stack_sz=%zu, all_stacks=%zu", stack_sz,
+	    __atomic_add_fetch(&all_stacks_sz, stack_sz, __ATOMIC_RELAXED));
 
 	ti = pool_alloc(&thread_info_pool);
 	if (!ti) {
@@ -71,13 +71,20 @@ void thread_user_stack_free(void *t) {
 
 	assert(t != NULL);
 
-	all_stacks_sz -= ti->pages * PAGE_SIZE();
-	log_debug("stack_sz=%d, all_stacks=%d", ti->pages * PAGE_SIZE(), all_stacks_sz);
+	log_debug("stack_sz=%zu, all_stacks=%zu", ti->pages * PAGE_SIZE(),
+	    __atomic_sub_fetch(&all_stacks_sz, ti->pages * PAGE_SIZE(),
+	        __ATOMIC_RELAXED));
 
-	page_free(thread_heap_allocator, ti->stack, ti->pages);
+	/* Poison before the pages go back: after page_free() they may already be
+	 * another thread's stack. */
 	memset(ti->stack, 0xa5, ti->pages * PAGE_SIZE());
+	page_free(thread_heap_allocator, ti->stack, ti->pages);
 
 	pool_free(&thread_info_pool, ti);
+}
+
+size_t thread_heap_free_bytes(void) {
+	return thread_heap_allocator ? thread_heap_allocator->free : 0;
 }
 
 static int thread_allocator_heap_init(void) {

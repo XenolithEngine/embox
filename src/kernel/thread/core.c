@@ -26,6 +26,7 @@
 #include <stdint.h>
 #include <time.h>
 #include <inttypes.h>
+#include <util/binalign.h>
 
 #include <embox/unit.h>
 
@@ -34,6 +35,7 @@
 #include <kernel/sched.h>
 #include <kernel/thread/signal.h>
 #include <kernel/thread/thread_alloc.h>
+#include <kernel/thread/thread_stack.h>
 #include <kernel/thread/thread_local.h>
 #include <kernel/thread/thread_sched_wait.h>
 #include <kernel/sched/schedee_priority.h>
@@ -220,6 +222,35 @@ static struct schedee *thread_process(struct schedee *prev, struct schedee *next
 	return &thread_self()->schedee;
 }
 
+#define STACK_CANARY_WORDS 4
+#define STACK_CANARY_SEED  0x43414e4152592121ull /* "CANARY!!" */
+
+static uint64_t *stack_canary_at(struct thread *t) {
+	return (uint64_t *)binalign_bound((uintptr_t)thread_stack_get(t),
+	    sizeof(uint64_t));
+}
+
+void thread_stack_canary_set(struct thread *t) {
+	uint64_t *w = stack_canary_at(t);
+	int i;
+
+	for (i = 0; i < STACK_CANARY_WORDS; i++) {
+		w[i] = STACK_CANARY_SEED ^ (uint64_t)(uintptr_t)&w[i];
+	}
+}
+
+int thread_stack_canary_ok(struct thread *t) {
+	uint64_t *w = stack_canary_at(t);
+	int i;
+
+	for (i = 0; i < STACK_CANARY_WORDS; i++) {
+		if (w[i] != (STACK_CANARY_SEED ^ (uint64_t)(uintptr_t)&w[i])) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
 void thread_init(struct thread *t, int priority,
 		void *(*run)(void *), void *arg) {
 
@@ -230,6 +261,8 @@ void thread_init(struct thread *t, int priority,
 
 	t->magic = THREAD_MAGIC_LIVE;
 	t->id = id_counter++; /* setup thread ID */
+
+	thread_stack_canary_set(t);
 
 	dlist_head_init(&t->thread_link); /* default unlink value */
 
