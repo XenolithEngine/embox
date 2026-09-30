@@ -53,3 +53,35 @@ void dcache_flush(const void *data, size_t size) {
 		dsb(sy);
 	}
 }
+
+static uint32_t icache_get_line_size(void) {
+	uint32_t ctr_el0;
+
+	ctr_el0 = ARCH_REG_LOAD(CTR_EL0);
+
+	return (4 << FIELD_GET(ctr_el0, CTR_EL0_ILINE));
+}
+
+/* The ARM ARM B2.4.4 sequence for self-modifying code. DC CVAU and IC IVAU
+ * are broadcast to the Inner Shareable domain, but the ISB covers only this
+ * core: another core must learn of the code through a lock or an atomic. */
+void icache_sync_range(const void *data, size_t size) {
+	uint64_t start, end, addr;
+	uint32_t dline, iline;
+
+	start = (uint64_t)(uintptr_t)data;
+	end = start + size;
+
+	dline = dcache_get_line_size();
+	for (addr = start & ~(uint64_t)(dline - 1); addr < end; addr += dline) {
+		ARCH_REG_STORE(DC_CVAU, addr);
+	}
+	dsb(ish);
+
+	iline = icache_get_line_size();
+	for (addr = start & ~(uint64_t)(iline - 1); addr < end; addr += iline) {
+		ARCH_REG_STORE(IC_IVAU, addr);
+	}
+	dsb(ish);
+	isb();
+}

@@ -129,6 +129,10 @@
 #define CTR_EL0_DLINE_MASK                     0b1111U
 #define CTR_EL0_DLINE_SHIFT                    16
 
+#define CTR_EL0_ILINE                          /* Log2 of the number of words in ICache line */
+#define CTR_EL0_ILINE_MASK                     0b1111U
+#define CTR_EL0_ILINE_SHIFT                    0
+
 /** Domain Access Control Register */
 #define DACR32_EL2                             DACR32_EL2
 #define __ARCH_REG_LOAD__DACR32_EL2()          __MRS_SYS(DACR32_EL2)
