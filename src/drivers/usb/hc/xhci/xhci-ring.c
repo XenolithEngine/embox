@@ -22,6 +22,8 @@
 #include "xhci_compat.h"
 #include "xhci_uboot.h"
 
+#include <kernel/time/ktime.h>
+
 dma_addr_t xhci_trb_virt_to_dma(struct xhci_segment *seg,
 				union xhci_trb *trb)
 {
@@ -460,8 +462,17 @@ union xhci_trb *xhci_wait_for_event(struct xhci_ctrl *ctrl, trb_type expected)
 	do {
 		union xhci_trb *event = ctrl->event_ring->dequeue;
 
-		if (!event_ready(ctrl))
+		if (!event_ready(ctrl)) {
+			/* The doorbell is already rung (schedule() is empty
+			 * so the queue loop cannot yield before it). A spin
+			 * here is the whole CPU on the UP image, and the
+			 * game thread never gets a frame. ksleep's argument
+			 * is milliseconds in this tree: 1 is one millisecond.
+			 * The transfer event stays in the ring until we read
+			 * it; sleeping does not drop it. */
+			ksleep(1);
 			continue;
+		}
 
 		type = TRB_FIELD_TO_TYPE(le32_to_cpu(event->event_cmd.flags));
 		if (type == expected ||
@@ -798,7 +809,7 @@ int xhci_bulk_tx(struct usb_device *udev, unsigned long pipe,
 again:
 	event = xhci_wait_for_event(ctrl, TRB_TRANSFER);
 	if (!event) {
-		debug("XHCI bulk transfer timed out, aborting...\n");
+		printf("XHCI bulk transfer timed out, aborting...\n");
 		abort_td(udev, ep_index);
 		udev->status = USB_ST_NAK_REC;  /* closest thing to a timeout */
 		udev->act_len = 0;

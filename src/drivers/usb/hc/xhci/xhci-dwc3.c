@@ -2,8 +2,9 @@
 /*
  * DWC3 host bring-up for the xHCI port, from U-Boot 2026.07
  * drivers/usb/host/xhci-dwc3.c. The DM probe/remove plumbing is replaced
- * by xhci_hcd_init_dwc3() in xhci_hcd.c; the register-level sequence is
- * U-Boot's, kept literal.
+ * by xhci_hcd_init_dwc3() in xhci_hcd.c. The GCTL.CORESOFTRESET pulse
+ * is done by the board overlay; this file must not mdelay() from
+ * hcd_start.
  *
  * Original copyright:
  * Copyright 2015 Freescale Semiconductor, Inc.
@@ -21,35 +22,16 @@ void dwc3_set_mode(struct dwc3 *dwc3_reg, u32 mode)
 			DWC3_GCTL_PRTCAPDIR(mode));
 }
 
-static void dwc3_phy_reset(struct dwc3 *dwc3_reg)
-{
-	/* Assert USB3 PHY reset */
-	setbits_le32(&dwc3_reg->g_usb3pipectl[0], DWC3_GUSB3PIPECTL_PHYSOFTRST);
-
-	/* Assert USB2 PHY reset */
-	setbits_le32(&dwc3_reg->g_usb2phycfg, DWC3_GUSB2PHYCFG_PHYSOFTRST);
-
-	mdelay(100);
-
-	/* Clear USB3 PHY reset */
-	clrbits_le32(&dwc3_reg->g_usb3pipectl[0], DWC3_GUSB3PIPECTL_PHYSOFTRST);
-
-	/* Clear USB2 PHY reset */
-	clrbits_le32(&dwc3_reg->g_usb2phycfg, DWC3_GUSB2PHYCFG_PHYSOFTRST);
-}
-
 void dwc3_core_soft_reset(struct dwc3 *dwc3_reg)
 {
-	/* Before Resetting PHY, put Core in Reset */
-	setbits_le32(&dwc3_reg->g_ctl, DWC3_GCTL_CORESOFTRESET);
-
-	/* reset USB3 phy - if required */
-	dwc3_phy_reset(dwc3_reg);
-
-	mdelay(100);
-
-	/* After PHYs are stable we can take Core out of reset state */
-	clrbits_le32(&dwc3_reg->g_ctl, DWC3_GCTL_CORESOFTRESET);
+	/*
+	 * The overlay already pulsed GCTL.CORESOFTRESET and set PRTCAP
+	 * host (silicon readback 30c11004). Do not pulse again, and do
+	 * not mdelay(): that ksleep is clock_gettime, and it used to die
+	 * once the arena remap had uncached the monotonic itimer.
+	 */
+	(void)dwc3_reg;
+	log_info("dwc3: soft-reset already done in overlay");
 }
 
 int dwc3_core_init(struct dwc3 *dwc3_reg)
@@ -58,7 +40,9 @@ int dwc3_core_init(struct dwc3 *dwc3_reg)
 	u32 revision;
 	unsigned int dwc3_hwparams1;
 
+	log_info("dwc3: core_init");
 	revision = readl(&dwc3_reg->g_snpsid);
+	log_info("dwc3: read GSNPSID=%08x", revision);
 	/* This should read as U3 followed by revision number */
 	if ((revision & DWC3_GSNPSID_MASK) != 0x55330000 &&
 	    (revision & DWC3_GSNPSID_MASK) != 0x33310000) {

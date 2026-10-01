@@ -188,12 +188,19 @@ int xhci_reset(struct xhci_hcor *hcor)
 
 	debug("// Reset the HC\n");
 	cmd = xhci_readl(&hcor->or_usbcmd);
+	debug("xhci: usbcmd=%08x, set HCRST\n", cmd);
 	cmd |= CMD_RESET;
 	xhci_writel(&hcor->or_usbcmd, cmd);
+	debug("xhci: HCRST written\n");
 
 	ret = handshake(&hcor->or_usbcmd, CMD_RESET, 0, XHCI_MAX_RESET_USEC);
-	if (ret)
+	if (ret) {
+		printf("Host reset failed after %u microseconds (usbcmd=%08x).\n",
+				XHCI_MAX_RESET_USEC,
+				xhci_readl(&hcor->or_usbcmd));
 		return ret;
+	}
+	debug("xhci: HCRST cleared\n");
 
 	/*
 	 * xHCI cannot write to any doorbells or operational registers other

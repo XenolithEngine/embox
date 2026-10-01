@@ -164,31 +164,54 @@ static inline int fls(unsigned int x) {
 #define clamp_val(val, lo, hi) \
 	((val) < (lo) ? (lo) : ((val) > (hi) ? (hi) : (val)))
 
-/* U-Boot include/linux/iopoll.h, polling variant: read op(addr) into val
- * until cond holds or timeout_us elapses; returns 0 or -ETIMEDOUT. */
-#define readx_poll_sleep_timeout(op, addr, val, cond, timeout_us, sleep_us) \
+/* U-Boot include/linux/iopoll.h argument order: sleep_us, timeout_us.
+ * Do not usleep. get_timer is clock_gettime(CLOCK_MONOTONIC); it reads
+ * sys_timecounter, which used to share the arena's NOCACHE page and
+ * assert in itimer_read_timespec. The spin cap is the backstop if the
+ * clock reads but does not advance. */
+#define readx_poll_sleep_timeout(op, addr, val, cond, sleep_us, timeout_us) \
 ({	uint64_t __end = get_timer(0) + (uint64_t)(timeout_us) / 1000 + 1; \
+	unsigned __spins = 0; \
 	int __ret = -ETIMEDOUT; \
-	for (;;) { 		(val) = op(addr); \
+	(void)(sleep_us); \
+	for (;;) { \
+		(val) = op(addr); \
 		if (cond) { __ret = 0; break; } \
 		if (get_timer(0) >= __end) break; \
-		if (sleep_us) usleep(sleep_us); \
-	} 	__ret; })
+		if (++__spins > 20000000u) break; \
+	} \
+	__ret; })
 #define DIV_ROUND_UP(n, d) (((n) + (d) - 1) / (d))
+/* Control stays at ep*2 (the EP0 ring). Anything else matches
+ * xhci_get_ep_index: IN is ep*2, OUT is ep*2-1. The old OR-1 formula
+ * addressed an OUT endpoint one slot off, so its doorbell missed the
+ * ring Configure Endpoint had built. */
 #define usb_pipe_ep_index(p) \
-	((usb_pipeendpoint((p)) << 1) | (usb_pipeout((p)) ? 1 : 0))
+	(usb_pipecontrol(p) ? (usb_pipeendpoint(p) << 1) : \
+		((usb_pipeendpoint(p) << 1) - (usb_pipein(p) ? 0 : 1)))
 
-/* U-Boot scheduler tick: the poll loops below want milliseconds. */
+/* U-Boot get_timer(base) is milliseconds since base. get_timer(0) is
+ * the absolute tick, which readx_poll uses as a deadline. The event
+ * wait does get_timer(start) < XHCI_TIMEOUT. Returning the absolute
+ * tick made that compare false once the box had been up for 5s, so
+ * Enable Slot was sampled once and timed out with the completion
+ * already in the ring. */
 #include <time.h>
-static inline uint64_t get_timer(int reset) {
+static inline uint64_t get_timer(uint64_t base) {
 	struct timespec ts;
-	(void)reset;
+	uint64_t ms;
+
 	clock_gettime(CLOCK_MONOTONIC, &ts);
-	return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+	ms = (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+	return ms - base;
 }
 
-/* U-Boot yields to the scheduler; the poll loop keeps going. A macro, not
- * a function: Embox's sched.h already declares its own schedule(void). */
+/* U-Boot yields inside long loops. A macro, not a function: Embox
+ * sched.h already declares schedule(void). Must stay empty. The bulk
+ * queue loop calls it before the doorbell, and a real yield there
+ * stranded the pad thread: the shell got the CPU back and the endpoint
+ * was never rung. The event wait is what sleeps (ksleep(1) while the
+ * event is not ready), after the doorbell. */
 #define schedule() do { } while (0)
 
 /* U-Boot cacheline config: xhci-mem.c derives CACHELINE_SIZE from it. */
@@ -407,6 +430,7 @@ struct usb_device {
 	int  devnum;        /* USB address assigned by the HC */
 	int  speed;         /* USB_SPEED_* above */
 	int  slot_id;
+	int  addressed;     /* Address Device already completed */
 	int  portnr;        /* root-hub port, 1-based */
 	int  maxchild;
 	unsigned long status;
@@ -427,14 +451,22 @@ static inline struct usb_device *xhci_get_ctrl_dev(struct usb_device *udev) {
 #define PIPE_INDEX_MASK 0xf
 #define PIPE_INDEX_SHIFT 8
 
-#define PIPE_TYPE_MASK  (0x3 << 30)
-#define PIPE_ISOCH      (0 << 30)
-#define PIPE_BULK       (1 << 30)
-#define PIPE_INTERRUPT  (2 << 30)
-#define PIPE_CONTROL    (3 << 30)
+/* Unsigned. (3 << 30) is a negative int, and a 64-bit pipe sign-extends
+ * it, so usb_pipecontrol() never matches. Control IN still landed on
+ * index 0 by accident. Control OUT (SET_CONFIG) took ep*2-1, wrapped,
+ * and prepare_ring reported the slot context as a disabled endpoint. */
+#define PIPE_TYPE_MASK  (0x3u << 30)
+#define PIPE_ISOCH      (0u << 30)
+#define PIPE_BULK       (1u << 30)
+#define PIPE_INTERRUPT  (2u << 30)
+#define PIPE_CONTROL    (3u << 30)
 
-#define PIPE_DIR_MASK   (1 << 31)
-#define PIPE_DIR_IN     (1 << 31)
+/* Bit 31 is PIPE_INTERRUPT (2<<30) and half of PIPE_CONTROL (3<<30).
+ * With the direction bit there, an interrupt OUT pipe could not say
+ * OUT: the type bit forced usb_pipein, and the transfer hit the IN
+ * index. Bit 16 is free (device is 0..7, endpoint is 8..11). */
+#define PIPE_DIR_MASK   (1 << 16)
+#define PIPE_DIR_IN     (1 << 16)
 #define PIPE_DIR_OUT    (0)
 
 #define usb_pipedev(p)      (((p) >> PIPE_DEV_SHIFT) & PIPE_DEV_MASK)

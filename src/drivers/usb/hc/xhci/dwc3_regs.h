@@ -67,7 +67,7 @@ struct dwc3 {					/* offset: 0xC100 */
 
 	u32 g_sts;
 
-	u32 reserved2;
+	u32 g_uctl1;			/* 0xc11c GUCTL1 */
 
 	u32 g_snpsid;
 	u32 g_gpio;
@@ -198,9 +198,14 @@ struct dwc3 {					/* offset: 0xC100 */
 #define DWC3_GUSB2PHYCFG_USBTRDTIM_8BIT (0x9 << \
 		DWC3_GUSB2PHYCFG_USBTRDTIM_OFFSET)
 
+/* GUCTL1 (g_uctl1, 0xc11c). Rockchip usb@fd000000 sets bit 28. */
+#define DWC3_GUCTL1_TX_IPGAP_LINECHECK_DIS	(1 << 28)
+
 /* Global USB3 PIPE Control Register */
 #define DWC3_GUSB3PIPECTL_PHYSOFTRST		(1 << 31)
 #define DWC3_GUSB3PIPECTL_DISRXDETP3		(1 << 28)
+/* Delay PHY power change from P0 to P1/P2/P3. Vendor dts clears it. */
+#define DWC3_GUSB3PIPECTL_DEPOCHANGE		(1 << 18)
 #define DWC3_GUSB3PIPECTL_SUSPHY		(1 << 17)
 
 /* Global TX Fifo Size Register */

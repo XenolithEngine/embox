@@ -55,10 +55,26 @@ void xhci_inval_cache(uintptr_t addr, u32 len)
  * @param ptr	pointer to "segement" to be freed
  * Return: none
  */
+/* DMA bytes live in the NOCACHE arena. libc free() is only for the
+ * heap metadata (segment, ring, virt_dev). */
+static void xhci_mfree(void *ptr)
+{
+	uintptr_t p = (uintptr_t)ptr;
+	uintptr_t base = (uintptr_t)xhci_dma.base;
+
+	if (!ptr) {
+		return;
+	}
+	if (xhci_dma.base && p >= base && p < base + xhci_dma.size) {
+		return;
+	}
+	free(ptr);
+}
+
 static void xhci_segment_free(struct xhci_ctrl *ctrl, struct xhci_segment *seg)
 {
 	xhci_dma_unmap(ctrl, seg->dma, SEGMENT_SIZE);
-	free(seg->trbs);
+	xhci_mfree(seg->trbs);
 	seg->trbs = NULL;
 
 	free(seg);
@@ -110,8 +126,8 @@ static void xhci_scratchpad_free(struct xhci_ctrl *ctrl)
 		       num_sp * sizeof(u64));
 	ctrl->dcbaa->dev_context_ptrs[0] = 0;
 
-	free(ctrl->scratchpad->scratchpad);
-	free(ctrl->scratchpad->sp_array);
+	xhci_mfree(ctrl->scratchpad->scratchpad);
+	xhci_mfree(ctrl->scratchpad->sp_array);
 	free(ctrl->scratchpad);
 	ctrl->scratchpad = NULL;
 }
@@ -126,7 +142,7 @@ static void xhci_free_container_ctx(struct xhci_ctrl *ctrl,
 				    struct xhci_container_ctx *ctx)
 {
 	xhci_dma_unmap(ctrl, ctx->dma, ctx->size);
-	free(ctx->bytes);
+	xhci_mfree(ctx->bytes);
 	free(ctx);
 }
 
@@ -182,10 +198,10 @@ void xhci_cleanup(struct xhci_ctrl *ctrl)
 	xhci_free_virt_devices(ctrl);
 	xhci_dma_unmap(ctrl, ctrl->erst.erst_dma_addr,
 		       sizeof(struct xhci_erst_entry) * ERST_NUM_SEGS);
-	free(ctrl->erst.entries);
+	xhci_mfree(ctrl->erst.entries);
 	xhci_dma_unmap(ctrl, ctrl->dcbaa->dma,
 		       sizeof(struct xhci_device_context_array));
-	free(ctrl->dcbaa);
+	xhci_mfree(ctrl->dcbaa);
 	memset(ctrl, '\0', sizeof(struct xhci_ctrl));
 }
 
@@ -198,13 +214,14 @@ void xhci_cleanup(struct xhci_ctrl *ctrl)
 static void *xhci_malloc(unsigned int size)
 {
 	void *ptr;
-	size_t cacheline_size = max(XHCI_ALIGNMENT, CACHELINE_SIZE);
+	size_t cacheline_size = max(XHCI_ALIGNMENT, (size_t)CACHELINE_SIZE);
 
-	ptr = memalign(cacheline_size, ALIGN(size, cacheline_size));
+	/* Heap is write-back. The event ring is written by the HC, and a
+	 * stale line there looks exactly like "no completion": Enable Slot
+	 * times out with the dequeue TRB still zero. The arena is the
+	 * NOCACHE window xhci_hcd_register already installed. */
+	ptr = xhci_dma_alloc(ALIGN(size, cacheline_size), cacheline_size);
 	BUG_ON(!ptr);
-	memset(ptr, '\0', size);
-
-	xhci_flush_cache((uintptr_t)ptr, size);
 
 	return ptr;
 }
@@ -240,6 +257,8 @@ static void xhci_link_segments(struct xhci_ctrl *ctrl, struct xhci_segment *prev
 		val &= ~TRB_TYPE_BITMASK;
 		val |= TRB_TYPE(TRB_LINK);
 		prev->trbs[TRBS_PER_SEGMENT-1].link.control = cpu_to_le32(val);
+		xhci_flush_cache((uintptr_t)&prev->trbs[TRBS_PER_SEGMENT - 1],
+				sizeof(union xhci_trb));
 	}
 }
 
@@ -341,6 +360,8 @@ struct xhci_ring *xhci_ring_alloc(struct xhci_ctrl *ctrl, unsigned int num_segs,
 		/* See section 4.9.2.1 and 6.4.4.1 */
 		prev->trbs[TRBS_PER_SEGMENT-1].link.control |=
 					cpu_to_le32(LINK_TOGGLE);
+		xhci_flush_cache((uintptr_t)&prev->trbs[TRBS_PER_SEGMENT - 1],
+				sizeof(union xhci_trb));
 	}
 	xhci_initialize_ring_info(ring);
 
@@ -393,10 +414,9 @@ static int xhci_scratchpad_alloc(struct xhci_ctrl *ctrl)
 	BUG_ON(i == 16);
 
 	ctrl->page_size = 1 << (i + 12);
-	buf = memalign(ctrl->page_size, num_sp * ctrl->page_size);
+	buf = xhci_dma_alloc(num_sp * ctrl->page_size, ctrl->page_size);
 	if (!buf)
 		goto fail_sp3;
-	memset(buf, '\0', num_sp * ctrl->page_size);
 	xhci_flush_cache((uintptr_t)buf, num_sp * ctrl->page_size);
 
 	scratchpad->scratchpad = buf;
@@ -412,7 +432,7 @@ static int xhci_scratchpad_alloc(struct xhci_ctrl *ctrl)
 	return 0;
 
 fail_sp3:
-	free(scratchpad->sp_array);
+	xhci_mfree(scratchpad->sp_array);
 
 fail_sp2:
 	free(scratchpad);
