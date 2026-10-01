@@ -33,6 +33,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <sched.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/mount.h>
@@ -386,6 +387,11 @@ TEST_CASE("a volume mounted and unmounted under a tree being walked") {
 
 		/* Unmounted: the path under the mount point is gone. */
 		test_assert_not_zero(open(FS_FILE, O_RDONLY) >= 0 ? 0 : 1);
+
+		/* A turn for the workers: a thread made ready does not take the core
+		 * from a running one of its own priority, and when umount succeeds
+		 * at once nothing here blocks. */
+		sched_yield();
 	}
 
 	workers_run = 0;

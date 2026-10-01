@@ -34,6 +34,7 @@ TEST_CASE("Test pthread_getattr_np") {
 	test_assert_equal(attr.stack, thread_stack_get(thread));
 
 	test_assert_zero(pthread_mutex_unlock(&mutex));
+	test_assert_zero(pthread_join(thread, NULL));
 
 	pthread_mutex_destroy(&mutex);
 	pthread_attr_destroy(&attr);

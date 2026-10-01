@@ -6,6 +6,7 @@
  */
 
 #include <pthread.h>
+#include <sched.h>
 #include <embox/test.h>
 
 static pthread_t low, medium, high, low_other;
@@ -60,6 +61,8 @@ static void *low_run(void *arg) {
 	test_emit('a');
 	test_assert_zero(pthread_create(&medium, medium_attr_p, medium_run, NULL));
 	test_assert_zero(pthread_create(&low_other, low_attr_p, low_other_run, NULL));
+	/* low_other has this thread's priority: it runs once this one yields. */
+	sched_yield();
 	for (int i = 0; i < 20000000; i++);
 	test_emit('g');
 	return NULL;

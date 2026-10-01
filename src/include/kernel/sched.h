@@ -149,6 +149,8 @@ extern void sched_set_current(struct schedee *schedee);
 
 extern void sched_ticker_add(void);
 extern void sched_ticker_del(void);
+/* Whether this CPU is on the scheduler tick (its slice will end). */
+extern int sched_ticker_on_here(void);
 
 #ifdef SMP /* XXX */
 extern void sched_ticker_set_shared(void);

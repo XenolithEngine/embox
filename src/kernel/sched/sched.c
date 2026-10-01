@@ -256,8 +256,10 @@ static void sched_poke_busy(unsigned int mask) {
  * it is what turns "may this CPU run it" into "is there more ready work than
  * this CPU is about to take". Without it, several ready workers queue behind
  * one core; without the test at all, the IPIs cost more than the balance wins.
+ *
+ * Returns whether an idle core was sent for `s`.
  */
-static void sched_wakeup_remote(struct schedee *s, int taken_here) {
+static int sched_wakeup_remote(struct schedee *s, int taken_here) {
 	extern void smp_send_resched(int cpu_id);
 	struct thread *idle;
 	unsigned int mask, self;
@@ -273,7 +275,7 @@ static void sched_wakeup_remote(struct schedee *s, int taken_here) {
 		 * one schedee if it is going to reschedule, none if it is not.
 		 * Otherwise the woken core finds the work already taken. */
 		if (rq_nr_ready <= (taken_here ? 1 : 0)) {
-			return;
+			return 0;
 		}
 	}
 	/* Else: this CPU may not run it at all, so somebody has to be woken
@@ -298,36 +300,60 @@ static void sched_wakeup_remote(struct schedee *s, int taken_here) {
 		cpudata_cpu_var(cpuid, resched_sent) = 1;
 		/* One schedee, one core. */
 		smp_send_resched(cpuid);
-		return;
+		return 1;
 	}
 
 	if (!(mask & (1u << self))) {
 		sched_poke_busy(mask);
 	}
+	return 0;
 }
 #endif /* SMP */
 
+/**
+ * Whether `s`, just made ready, takes this CPU from what runs on it.
+ *
+ * Only a higher priority does, and only on a CPU `s` may run on. POSIX puts a
+ * thread made runnable at the tail of its priority's list, behind the one
+ * running; a woken equal that ran at once would block on the mutex its waker
+ * still holds.
+ *
+ * Not taking the CPU must not mean waiting for it forever: a core running one
+ * thread alone is not on the scheduler tick, and nothing would end the slice
+ * of a waker that does not block. Unless another core was sent to take `s`,
+ * or this one is on the tick already, the scheduler is run here without a
+ * yield: it keeps the current thread and puts the core on the tick, which ends
+ * the slice as it would for any other rival (sched_poke_busy() does the same
+ * to a remote core).
+ *
+ * An lthread of equal priority runs at once.
+ */
 static void sched_check_preempt(struct schedee *s) {
 	/* Kept in a variable because it is also the answer
 	 * to "is this CPU about to take one out of the queue". */
 	int taken_here;
+	int cur_prio, prio, may_run_here, sent;
 
-	// TODO ask runq
-	taken_here = (schedee_priority_get(schedee_get_current())
-	              <= schedee_priority_get(s));
+	cur_prio = schedee_priority_get(schedee_get_current());
+	prio = schedee_priority_get(s);
+	may_run_here = sched_affinity_check(&s->affinity, 1 << cpu_get_id());
+
+	taken_here = may_run_here &&
+	    (cur_prio < prio || (cur_prio == prio && !schedee_is_thread(s)));
 
 	if (taken_here) {
-		if (schedee_is_thread(s)) {
-			sched_post_switch(); // TODO SMP
-		} else {
-			sched_post_switch();
-			//sched_post_switch_noyield();
-		}
+		sched_post_switch();
 	}
 
+	sent = 0;
 #ifdef SMP
-	sched_wakeup_remote(s, taken_here);
+	sent = sched_wakeup_remote(s, taken_here);
 #endif
+
+	if (!taken_here && may_run_here && cur_prio == prio && !sent &&
+	        !sched_ticker_on_here()) {
+		sched_post_switch_noyield();
+	}
 }
 
 /** Locks: IPL, thread, runq. */
@@ -379,7 +405,13 @@ int sched_change_priority(struct schedee *s, int prior,
 	if (in_rq)
 		__sched_enqueue(s);
 
-	sched_check_preempt(s);
+	if (s == schedee_get_current()) {
+		/* Its own priority: whether it still keeps the CPU is what the
+		 * scheduler decides from the queue, with no yield to an equal. */
+		sched_post_switch_noyield();
+	} else {
+		sched_check_preempt(s);
+	}
 
 	spin_unlock_ipl(&rq.lock, ipl);
 

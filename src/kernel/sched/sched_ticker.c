@@ -61,6 +61,10 @@ void sched_ticker_del(void) {
 	}
 }
 
+int sched_ticker_on_here(void) {
+	return sys_timer_is_started(&sched_tick_timer);
+}
+
 #ifdef SMP /* XXX */
 void sched_ticker_set_shared(void) {
 	if (!sys_timer_is_shared(&sched_tick_timer)) {
