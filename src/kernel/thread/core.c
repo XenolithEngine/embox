@@ -270,6 +270,7 @@ void thread_init(struct thread *t, int priority,
 
 	t->critical_count = __CRITICAL_COUNT(CRITICAL_SCHED_LOCK);
 	t->siglock = 0;
+	t->errno_val = 0;
 
 	t->state = TS_INIT;
 

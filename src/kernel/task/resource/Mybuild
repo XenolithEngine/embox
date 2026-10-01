@@ -6,11 +6,24 @@ module dropbear_res {
 	depends embox.kernel.task.task_resource
 }
 
-module errno {
+/* errno_location() for the kernel and everything linked into it. errno_task
+ * keeps one word per task; errno_thread keeps one per thread, as POSIX has
+ * it, and one per CPU for interrupt handlers. */
+@DefaultImpl(errno_task)
+abstract module errno {
+}
+
+module errno_task extends errno {
 	source "errno.c"
 
 	depends embox.kernel.task.task_resource
 	@NoRuntime depends embox.compat.libc.assert
+}
+
+module errno_thread extends errno {
+	source "errno_thread.c"
+
+	depends embox.kernel.thread.core
 }
 
 module module_ptr {

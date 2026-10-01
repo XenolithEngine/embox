@@ -92,6 +92,8 @@ struct thread {
 	struct thread_wait thread_wait_list;
 
 	int                policy;
+
+	int                errno_val;    /**< errno, with task.resource.errno_thread */
 } __attribute__ ((aligned(THREAD_STACK_ALIGN)));
 
 
