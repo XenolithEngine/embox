@@ -79,7 +79,12 @@ static void uart_internal_init(struct uart *uart) {
 	dlist_add_next(&uart->uart_lnk, &uart_list);
 }
 
+#define UART_OPEN_DRAIN_MAX 128
+
 int uart_open(struct uart *uart) {
+	const struct uart_ops *uops = uart->uart_ops;
+	int ret, i;
+
 	if (uart_state_test(uart, UART_STATE_OPEN)) {
 		return -EINVAL;
 	}
@@ -87,7 +92,26 @@ int uart_open(struct uart *uart) {
 
 	uart_internal_init(uart);
 
-	uart_setup(uart);
+	/* The source stays masked through setup and the drain: a level source
+	 * latched before the open (a 16550 character timeout, which no register
+	 * read acknowledges) would fire with nothing the handler can clear. */
+	if (uops->uart_irq_dis) {
+		uops->uart_irq_dis(uart, &uart->params);
+	}
+
+	ret = uart_setup(uart);
+	if (ret) {
+		uart_state_clear(uart, UART_STATE_OPEN);
+		return ret;
+	}
+
+	/* Bounded: a line that keeps receiving (noise, a stuck break) must not
+	 * hold the open for ever. Twice the deepest FIFO here. */
+	if (uops->uart_hasrx) {
+		for (i = 0; i < UART_OPEN_DRAIN_MAX && uops->uart_hasrx(uart); i++) {
+			uops->uart_getc(uart);
+		}
+	}
 
 	return uart_attach_irq(uart);
 }

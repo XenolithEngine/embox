@@ -89,6 +89,9 @@
 #define UART_IER_TE   (1U << 6) /* DMA Rx End */
 #define UART_IER_RE   (1U << 7) /* DMA Tx End */
 
+#define UART_FCR_ENABLE   (1U << 0) /* FIFO enable */
+#define UART_FCR_RX_RESET (1U << 1) /* RX FIFO reset */
+
 #define UART_LCR_PE   (1U << 3) /* Parity Enable */
 #define UART_LCR_EP   (1U << 4) /* Even Parity */
 #define UART_LCR_FP   (1U << 5) /* Force Parity */
@@ -131,7 +134,18 @@ static inline int uart_setup_hw(struct uart *dev) {
 #endif /* USE_BOARD_CONF */
 
 static int ns16550_setup(struct uart *dev, const struct uart_params *params) {
+	/* The transmitter first: a TX FIFO reset would drop the tail of
+	 * whatever was still going out, another core's printk among it. */
 	while (!(UART_REG_LOAD(UART_LSR(dev->base_addr)) & UART_LSR_TE)) {}
+
+	/* Clear every latch before a source is raised: the RX FIFO reset ends a
+	 * character timeout (IIR 0xC), which no register read acknowledges, and
+	 * the RHR/LSR/MSR reads clear the rest. Trigger level stays at one byte. */
+	UART_REG_STORE(UART_FCR(dev->base_addr),
+			UART_FCR_ENABLE | UART_FCR_RX_RESET);
+	(void)UART_REG_LOAD(UART_RHR(dev->base_addr));
+	(void)UART_REG_LOAD(UART_LSR(dev->base_addr));
+	(void)UART_REG_LOAD(UART_MSR(dev->base_addr));
 
 	if (params->uart_param_flags & UART_PARAM_FLAGS_USE_IRQ) {
 		UART_REG_ORIN(UART_IER(dev->base_addr), UART_IER_DR);
