@@ -11,13 +11,27 @@
  *
  * Two landings (ABI section 6.1): exit(93) ends the calling thread only, while
  * exit_group(94) ends the task -- its threads, its address space, its memory.
+ *
+ * A fault ends the task too (SIGSEGV and SIGILL kill the process), so the other
+ * threads do not wait for ever on a lock the faulting one held. Ending a task is
+ * the loader's business (drivers/xlexec), so that landing is weak: without a
+ * loader, or in the kernel task, only the thread ends.
  */
 #include <stdint.h>
 
 #include <kernel/task.h>
 #include <kernel/thread.h>
 
+#define EL0_DEAD_FAULT (2ULL << 32)
+
+__attribute__((weak)) void _NORETURN aarch64_usermode_fault_dead(uint64_t reason) {
+	thread_exit((void *)(uintptr_t)reason);
+}
+
 void _NORETURN aarch64_usermode_dead(uint64_t reason) {
+	if ((reason & ~0xffffffffULL) == EL0_DEAD_FAULT) {
+		aarch64_usermode_fault_dead(reason);
+	}
 	thread_exit((void *)(uintptr_t)reason);
 }
 
