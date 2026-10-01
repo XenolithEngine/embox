@@ -348,6 +348,18 @@ void usb_free_configuration(struct usb_dev *dev) {
 	}
 }
 
+/* The pair of usb_get_ep0(): a device that goes back to the pool gives its
+ * host controller the chance to drop what it keeps for it. */
+void usb_put_ep0(struct usb_dev *dev) {
+	struct usb_endp *ep = &dev->endp0;
+	struct usb_hcd *hcd = dev->hcd;
+
+	if (ep->hci_specific && hcd && hcd->ops->endp_hci_free) {
+		hcd->ops->endp_hci_free(ep, ep->hci_specific);
+	}
+	ep->hci_specific = NULL;
+}
+
 int usb_get_ep0(struct usb_dev *dev) {
 	struct usb_endp *ep;
 	struct usb_hcd *hcd = dev->hcd;

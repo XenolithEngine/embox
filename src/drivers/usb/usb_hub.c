@@ -69,6 +69,7 @@ struct usb_dev *usb_new_device(struct usb_dev *parent,
 
 	dev->hcd = hcd;
 	dev->parent = parent;
+	dev->port = port;
 
 	/* Fill control endpoint. */
 	if (usb_get_ep0(dev) < 0) {
@@ -147,6 +148,7 @@ struct usb_dev *usb_new_device(struct usb_dev *parent,
 
 out_err:
 	log_error("failed");
+	usb_put_ep0(dev);
 	dlist_del(&dev->dev_link);
 	pool_free(&usb_devs, dev);
 	return NULL;
@@ -253,7 +255,7 @@ static uint8_t usb_desc_dma_buf[64] __attribute__((aligned(64)));
 /* This function initializes device at a given port. */
 static int usb_device_init(struct usb_hub *hub, struct usb_dev *dev) {
 	int ret;
-	uint32_t addr;
+	size_t addr;
 
 	/* Only 8 bytes of ep0 may be assumed before bMaxPacketSize0 is known
 	 * (USB 2.0, 9.3.5, 9.6.1); an 8-byte ep0 NAKs a larger first read. Read
@@ -334,10 +336,10 @@ static int usb_device_init(struct usb_hub *hub, struct usb_dev *dev) {
 		USB_REQ_SET_ADDRESS, addr,
 		0, 0, NULL, 1000);
 	if (ret != 0) {
-		log_error("SET_ADDR (addr=%d) failed ret=%d\n", addr, ret);
+		log_error("SET_ADDR (addr=%zu) failed ret=%d\n", addr, ret);
 		return ret < 0 ? ret : -1;
 	}
-	log_debug("SET_ADDR (addr=%d) OK", addr);
+	log_debug("SET_ADDR (addr=%zu) OK", addr);
 	dev->addr = addr;
 
 	/* SET_ADDRESS recovery is 2 ms (USB 2.0, 9.2.6.3). */

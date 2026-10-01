@@ -125,6 +125,9 @@ struct usb_dev_config {
 struct usb_dev {
 	unsigned short bus_idx;
 	unsigned short addr;
+	/* Port on the parent hub (root port for root-attached devices). The
+	 * xHCI slot context needs it to build the route string. */
+	unsigned int port;
 	struct dlist_head dev_link;
 	struct usb_dev *parent;
 
@@ -240,5 +243,6 @@ extern int usb_set_iface(struct usb_dev *dev, int iface, int alt);
 /* FIXME This function is more like workaround to initialize
  * control endpoint. */
 extern int usb_get_ep0(struct usb_dev *dev);
+extern void usb_put_ep0(struct usb_dev *dev);
 
 #endif /* DRIVERS_USB_H_ */
