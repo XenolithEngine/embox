@@ -78,6 +78,18 @@ extern void task_start_exit(void);
 extern void task_do_exit(struct task *task, int status);
 
 /**
+ * End @p task, which the caller does not belong to, with @p status: the same
+ * teardown as its own exit, every thread of it gone before anything is freed.
+ * The caller holds the scheduler lock exactly once (the one it found the task
+ * under); it is given up while the threads leave and held again on return.
+ * @p task must not be touched once the caller drops it: its parent may
+ * collect it then.
+ *
+ * @return 0, or -EALREADY if the task was already exiting
+ */
+extern int task_terminate_other(struct task *task, int status);
+
+/**
  * Whether @p t belongs to a task that is being torn down by another of its
  * threads. Such a thread is killed: a wait it is in ends with -EINTR
  * (sched_intr()), and it leaves at the next point where it would return to

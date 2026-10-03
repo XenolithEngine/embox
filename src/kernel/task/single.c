@@ -36,6 +36,10 @@ void task_do_exit(struct task *task, int status) {
 	panic("single task %s called\n", __func__);
 }
 
+int task_terminate_other(struct task *task, int status) {
+	panic("single task %s called\n", __func__);
+}
+
 void task_start_exit(void) {
 	panic("single task %s called\n", __func__);
 }

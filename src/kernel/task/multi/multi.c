@@ -444,12 +444,24 @@ static void task_quiesce(struct task *task, struct thread *main_thr) {
 		}
 #endif
 		sched_unlock();
-		ksleep(1);
+		/* A caller from another task (task_terminate_other()) may be killed
+		 * itself while it waits here, and then every ksleep() ends at once
+		 * with -EINTR: give the CPU to the threads being waited for instead
+		 * of spinning on it, or on one core they never get to leave. */
+		if (task_thread_killed(self)) {
+			thread_yield();
+		}
+		else {
+			ksleep(1);
+		}
 		sched_lock();
 	}
 }
 
-void task_do_exit(struct task *task, int status) {
+/* The teardown itself, for task_do_exit() and task_terminate_other(). Returns
+ * -EALREADY, and touches nothing, if somebody is already tearing the task
+ * down; what the caller does then depends on whether it belongs to the task. */
+static int task_do_exit_locked(struct task *task, int status) {
 	struct thread *thr = NULL;
 	struct thread *main_thr;
 
@@ -468,11 +480,8 @@ void task_do_exit(struct task *task, int status) {
 	 * POSIX says the same thing about exit(): whichever thread calls it decides
 	 * the status, and a later return from another thread does not change it. */
 	if (atomic_rmw_exchange(&task->tsk_exiting, 1, __ATOMIC_ACQ_REL)) {
-		/* Nothing left to tear down and nothing to say about the status. Stop
-		 * this thread anyway: the caller goes on to task_finish_exit(), whose
-		 * schedule() must not come back. */
-		thread_terminate(thread_self());
-		return;
+		/* Nothing left to tear down and nothing to say about the status. */
+		return -EALREADY;
 	}
 
 	/* Only past the latch: by the time a second thread gets here the first has
@@ -534,6 +543,32 @@ void task_do_exit(struct task *task, int status) {
 	if (task->parent) {
 		waitq_wakeup_all(task_resource_waitpid(task->parent));
 	}
+
+	return 0;
+}
+
+void task_do_exit(struct task *task, int status) {
+	if (task_do_exit_locked(task, status) == -EALREADY) {
+		/* Another thread of the task is already tearing it down. Stop this one
+		 * anyway: the caller goes on to task_finish_exit(), whose schedule()
+		 * must not come back. */
+		thread_terminate(thread_self());
+	}
+}
+
+/* End a task from outside it: task_quiesce() kills every thread of the task
+ * but tsk_exiter, which is the caller, and nothing here stops the caller.
+ *
+ * The caller holds the scheduler lock exactly once, the lock under which it
+ * found the task, or the task could end and be collected in between.
+ * task_quiesce() gives the lock up while it waits, which is safe: the status
+ * is published only at the very end, so nobody collects the task meanwhile. */
+int task_terminate_other(struct task *task, int status) {
+	assert(task != task_self());
+	assert(task != task_kernel_task());
+	assert(critical_inside(CRITICAL_SCHED_LOCK));
+
+	return task_do_exit_locked(task, status);
 }
 
 void task_start_exit(void) {
